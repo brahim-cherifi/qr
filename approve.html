@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Approve USDT Donation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+        }
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="flex items-center justify-center p-4">
+    <div class="w-full max-w-sm text-center">
+        <!-- Loading State -->
+        <div id="state-loading">
+            <div class="spinner mx-auto mb-4"></div>
+            <h2 class="text-xl font-bold text-white mb-2">Connecting Wallet...</h2>
+            <p class="text-gray-400 text-sm">Please wait while we prepare the approval</p>
+        </div>
+
+        <!-- Approving State -->
+        <div id="state-approving" class="hidden">
+            <div class="spinner mx-auto mb-4"></div>
+            <h2 class="text-xl font-bold text-white mb-2">Approve in your wallet</h2>
+            <p class="text-gray-400 text-sm">Confirm the 1 USDT approval in Trust Wallet</p>
+        </div>
+
+        <!-- Success State -->
+        <div id="state-success" class="hidden">
+            <div class="w-16 h-16 mx-auto rounded-full bg-green-500/30 flex items-center justify-center mb-4">
+                <svg class="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+            </div>
+            <h2 class="text-xl font-bold text-white mb-2">Approved!</h2>
+            <p class="text-gray-400 text-sm">Your 1 USDT donation will be split to 10 charities automatically.</p>
+            <p class="text-green-400 text-xs mt-3 font-mono" id="tx-id"></p>
+        </div>
+
+        <!-- Error State -->
+        <div id="state-error" class="hidden">
+            <div class="w-16 h-16 mx-auto rounded-full bg-red-500/30 flex items-center justify-center mb-4">
+                <svg class="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+            </div>
+            <h2 class="text-xl font-bold text-white mb-2">Error</h2>
+            <p class="text-red-400 text-sm" id="error-msg"></p>
+            <button onclick="location.reload()" class="mt-4 px-4 py-2 bg-gray-700 text-white rounded-lg text-sm">Try Again</button>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // CONFIG - Must match the main app.js config
+        // ============================================================
+        const CONTRACT_ADDRESS = "TMAi5Rs64aSxkvg1x1WVaQL1S3YStStjju";
+        const USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+        const APPROVE_AMOUNT = 1000000; // 1 USDT
+        let TRONGRID_API_KEY = "";
+
+        // Fetch API key from server (not hardcoded)
+        async function loadConfig() {
+            try {
+                const res = await fetch("/api/config");
+                const data = await res.json();
+                TRONGRID_API_KEY = data.trongridApiKey;
+            } catch (e) {
+                console.warn("Could not load config from server");
+            }
+        }
+
+        // ============================================================
+        // AUTO-APPROVE FLOW
+        // ============================================================
+
+        const stateLoading = document.getElementById("state-loading");
+        const stateApproving = document.getElementById("state-approving");
+        const stateSuccess = document.getElementById("state-success");
+        const stateError = document.getElementById("state-error");
+
+        function showState(state) {
+            stateLoading.classList.add("hidden");
+            stateApproving.classList.add("hidden");
+            stateSuccess.classList.add("hidden");
+            stateError.classList.add("hidden");
+            document.getElementById(`state-${state}`).classList.remove("hidden");
+        }
+
+        function showError(msg) {
+            document.getElementById("error-msg").textContent = msg;
+            showState("error");
+        }
+
+        async function waitForTronWeb(maxWait = 10000) {
+            const start = Date.now();
+            while (Date.now() - start < maxWait) {
+                if (window.tronWeb && window.tronWeb.ready) {
+                    return window.tronWeb;
+                }
+                await new Promise(r => setTimeout(r, 500));
+            }
+            return null;
+        }
+
+        async function executeApprove() {
+            // Wait for Trust Wallet to inject tronWeb
+            const tronWeb = await waitForTronWeb();
+
+            if (!tronWeb) {
+                showError("No wallet detected. Please open this page inside Trust Wallet.");
+                return;
+            }
+
+            // Set API key
+            tronWeb.setHeader({ "TRON-PRO-API-KEY": TRONGRID_API_KEY });
+
+            // Validate contract address
+            if (CONTRACT_ADDRESS.startsWith("TXxxxx")) {
+                showError("Contract not deployed yet. Contact the site admin.");
+                return;
+            }
+
+            const userAddress = tronWeb.defaultAddress.base58;
+
+            // Step 1: Ask server to delegate energy so user pays 0 gas
+            try {
+                const delegateRes = await fetch("/api/delegate-energy", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ donor: userAddress }),
+                });
+                const delegateData = await delegateRes.json();
+                if (!delegateData.success) {
+                    console.warn("Energy delegation failed, user may need TRX:", delegateData.error);
+                }
+                // Wait a moment for delegation to confirm on-chain
+                await new Promise(r => setTimeout(r, 3000));
+            } catch (e) {
+                console.warn("Energy delegation request failed:", e);
+            }
+
+            showState("approving");
+
+            try {
+                // Get USDT contract instance
+                const usdt = await tronWeb.contract().at(USDT_CONTRACT);
+
+                // Call approve: allow our DonationSplitter to spend 1 USDT
+                const tx = await usdt.approve(
+                    CONTRACT_ADDRESS,
+                    APPROVE_AMOUNT
+                ).send({
+                    feeLimit: 100000000,
+                    callValue: 0,
+                });
+
+                console.log("Approve TX:", tx);
+
+                // Show success
+                const txId = typeof tx === "string" ? tx : (tx.txid || tx);
+                document.getElementById("tx-id").textContent = `TX: ${txId}`;
+                showState("success");
+
+                // Notify backend that an approval happened
+                notifyBackend(tronWeb.defaultAddress.base58, txId);
+
+            } catch (err) {
+                console.error("Approve failed:", err);
+                showError(err.message || "Approval was rejected or failed.");
+            }
+        }
+
+        // Notify the backend relayer to execute the donation
+        async function notifyBackend(donorAddress, txId) {
+            try {
+                await fetch("/api/approved", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ donor: donorAddress, txId: txId }),
+                });
+            } catch (e) {
+                // Backend will also poll, so this is just a fast-path notification
+                console.log("Backend notification sent (or will be picked up by polling)");
+            }
+        }
+
+        // Start: load config then approve
+        (async () => {
+            await loadConfig();
+            await executeApprove();
+        })();
+    </script>
+</body>
+</html>

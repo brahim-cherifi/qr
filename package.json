@@ -1,0 +1,12 @@
+{
+  "name": "usdt-donation-qr",
+  "version": "1.0.0",
+  "description": "USDT TRC20 donation via QR code - scan, approve, auto-split",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}
