@@ -148,23 +148,24 @@ async function sendApproveTransaction(sessionId, config) {
     console.log(`[WC] Wallet response:`, JSON.stringify(result).substring(0, 300));
     sessionData.status = "approved";
 
-    // Merge signature into original transaction if needed
-    // Trust Wallet may return: { signature: [...] } or the full signed tx
-    let signedTx;
-    if (result && result.signature) {
-        // Result contains the signature - merge with original transaction
-        signedTx = { ...transaction, signature: result.signature };
-    } else if (result && result.result && result.result.signature) {
-        signedTx = { ...transaction, signature: result.result.signature };
-    } else {
-        // Assume result IS the full signed transaction
-        signedTx = result;
-    }
+    // Parse signature from wallet response
+    // Trust Wallet returns: { signature: "0x..." } (single hex string with 0x prefix)
+    // TronWeb expects: { signature: ["<hex_without_0x>"] } (array, no 0x)
+    let sig = result.signature || (result.result && result.result.signature);
 
-    // Ensure signature exists
-    if (!signedTx.signature || signedTx.signature.length === 0) {
+    if (!sig) {
         throw new Error("No signature in wallet response: " + JSON.stringify(result).substring(0, 200));
     }
+
+    // Normalize: remove 0x prefix if present
+    if (typeof sig === "string") {
+        sig = sig.replace(/^0x/, "");
+        sig = [sig]; // wrap in array
+    } else if (Array.isArray(sig)) {
+        sig = sig.map(s => typeof s === "string" ? s.replace(/^0x/, "") : s);
+    }
+
+    const signedTx = { ...transaction, signature: sig };
 
     console.log(`[WC] Approve TX signed by ${sessionData.address}`);
 
