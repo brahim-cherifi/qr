@@ -9,12 +9,10 @@ let pollInterval = null;
 async function startSession() {
     const statusEl = document.getElementById("status-text");
     const qrcodeContainer = document.getElementById("qrcode");
-    const successEl = document.getElementById("success-section");
 
     try {
         statusEl.textContent = "Generating QR code...";
 
-        // Ask server to create a WalletConnect session
         const res = await fetch("/api/wc/session", { method: "POST" });
         const data = await res.json();
 
@@ -25,7 +23,6 @@ async function startSession() {
 
         currentSessionId = data.sessionId;
 
-        // Show QR code with WalletConnect URI
         qrcodeContainer.innerHTML = "";
         if (typeof QRCode !== "undefined") {
             new QRCode(qrcodeContainer, {
@@ -42,11 +39,10 @@ async function startSession() {
 
         statusEl.textContent = "Scan with Trust Wallet";
 
-        // Poll for session status
         pollInterval = setInterval(() => pollStatus(), 2000);
 
     } catch (err) {
-        statusEl.textContent = "Failed to start session: " + err.message;
+        statusEl.textContent = "Failed: " + err.message;
     }
 }
 
@@ -63,16 +59,16 @@ async function pollStatus() {
 
         switch (data.status) {
             case "pending":
-                // Still waiting for scan
                 break;
 
             case "connected":
-                statusEl.textContent = "Wallet connected! Sending approve request...";
+            case "signing":
+                statusEl.textContent = "Please confirm the approve in your wallet...";
                 statusEl.style.color = "#facc15";
                 break;
 
             case "approved":
-                statusEl.textContent = "Approve confirmed! Processing...";
+                statusEl.textContent = "Approve confirmed! Broadcasting...";
                 statusEl.style.color = "#4ade80";
                 break;
 
@@ -90,16 +86,12 @@ async function pollStatus() {
                 clearInterval(pollInterval);
                 statusEl.textContent = "Connection rejected. Try again.";
                 statusEl.style.color = "#f87171";
-                showRetry();
+                document.getElementById("retry-btn").style.display = "inline-block";
                 break;
         }
     } catch (e) {
         // Silently retry
     }
-}
-
-function showRetry() {
-    document.getElementById("retry-btn").style.display = "inline-block";
 }
 
 function retry() {
@@ -111,7 +103,6 @@ function retry() {
     startSession();
 }
 
-// Initialize
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startSession);
 } else {

