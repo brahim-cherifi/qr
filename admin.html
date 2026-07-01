@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Donation Monitor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: #0f172a;
+            min-height: 100vh;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot-green { background: #22c55e; }
+        .dot-yellow { background: #eab308; }
+        .dot-red { background: #ef4444; }
+        .dot-blue { background: #3b82f6; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <!-- Header -->
+    <div class="max-w-6xl mx-auto">
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-2xl font-bold text-white">Admin Panel</h1>
+                <p class="text-gray-500 text-sm">Donation Splitter Monitor</p>
+            </div>
+            <div class="flex items-center gap-3">
+                <span id="server-status" class="flex items-center gap-2 text-xs text-gray-400">
+                    <span class="status-dot dot-red"></span> Connecting...
+                </span>
+                <button onclick="refreshAll()" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition">
+                    Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div class="glass rounded-xl p-4">
+                <p class="text-gray-500 text-xs mb-1">Pending</p>
+                <p id="stat-pending" class="text-2xl font-bold text-yellow-400">-</p>
+            </div>
+            <div class="glass rounded-xl p-4">
+                <p class="text-gray-500 text-xs mb-1">Completed</p>
+                <p id="stat-completed" class="text-2xl font-bold text-green-400">-</p>
+            </div>
+            <div class="glass rounded-xl p-4">
+                <p class="text-gray-500 text-xs mb-1">Total USDT Split</p>
+                <p id="stat-total-usdt" class="text-2xl font-bold text-white">-</p>
+            </div>
+            <div class="glass rounded-xl p-4">
+                <p class="text-gray-500 text-xs mb-1">Relayer TRX</p>
+                <p id="stat-relayer-trx" class="text-2xl font-bold text-blue-400">-</p>
+            </div>
+        </div>
+
+        <!-- Contract & Relayer Info -->
+        <div class="glass rounded-xl p-4 mb-6">
+            <h2 class="text-sm font-semibold text-gray-300 mb-3">System Info</h2>
+            <div class="grid md:grid-cols-2 gap-3 text-sm">
+                <div>
+                    <span class="text-gray-500">Contract:</span>
+                    <a id="info-contract" href="#" target="_blank" class="text-blue-400 hover:underline font-mono text-xs ml-1"></a>
+                </div>
+                <div>
+                    <span class="text-gray-500">Relayer:</span>
+                    <a id="info-relayer" href="#" target="_blank" class="text-blue-400 hover:underline font-mono text-xs ml-1"></a>
+                </div>
+                <div>
+                    <span class="text-gray-500">USDT Contract:</span>
+                    <span class="text-gray-400 font-mono text-xs ml-1">TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t</span>
+                </div>
+                <div>
+                    <span class="text-gray-500">Poll Interval:</span>
+                    <span id="info-poll" class="text-gray-400 text-xs ml-1"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex gap-1 mb-4">
+            <button id="tab-pending" onclick="switchTab('pending')" class="px-4 py-2 bg-yellow-500/20 text-yellow-400 text-sm rounded-lg font-medium">
+                Pending <span id="tab-pending-count" class="ml-1 text-xs opacity-70"></span>
+            </button>
+            <button id="tab-completed" onclick="switchTab('completed')" class="px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium">
+                Completed <span id="tab-completed-count" class="ml-1 text-xs opacity-70"></span>
+            </button>
+            <button id="tab-logs" onclick="switchTab('logs')" class="px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium">
+                Logs
+            </button>
+        </div>
+
+        <!-- Pending Donors Table -->
+        <div id="panel-pending" class="glass rounded-xl overflow-hidden">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-gray-700/50">
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Donor Address</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Queued At</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Allowance</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Balance</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Status</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pending-tbody">
+                    <tr><td colspan="6" class="text-center text-gray-600 p-8 text-sm">No pending donors</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Completed Donors Table -->
+        <div id="panel-completed" class="glass rounded-xl overflow-hidden hidden">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-gray-700/50">
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Donor Address</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Completed At</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">TX Hash</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Amount</th>
+                    </tr>
+                </thead>
+                <tbody id="completed-tbody">
+                    <tr><td colspan="4" class="text-center text-gray-600 p-8 text-sm">No completed donations</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Logs Panel -->
+        <div id="panel-logs" class="glass rounded-xl p-4 hidden">
+            <div id="logs-container" class="font-mono text-xs text-gray-400 space-y-1 max-h-96 overflow-y-auto">
+                <p class="text-gray-600">Waiting for logs...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ADMIN_PASSWORD = localStorage.getItem("admin_pw") || prompt("Enter admin password:");
+        if (ADMIN_PASSWORD) localStorage.setItem("admin_pw", ADMIN_PASSWORD);
+
+        const headers = {
+            "Content-Type": "application/json",
+            "x-admin-key": ADMIN_PASSWORD,
+        };
+
+        // Tab switching
+        function switchTab(tab) {
+            document.getElementById("panel-pending").classList.add("hidden");
+            document.getElementById("panel-completed").classList.add("hidden");
+            document.getElementById("panel-logs").classList.add("hidden");
+            document.getElementById(`panel-${tab}`).classList.remove("hidden");
+
+            document.getElementById("tab-pending").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
+            document.getElementById("tab-completed").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
+            document.getElementById("tab-logs").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
+
+            const colors = { pending: "yellow", completed: "green", logs: "blue" };
+            const c = colors[tab];
+            document.getElementById(`tab-${tab}`).className = `px-4 py-2 bg-${c}-500/20 text-${c}-400 text-sm rounded-lg font-medium`;
+        }
+
+        function shortenAddr(addr) {
+            if (!addr) return "-";
+            return addr.substring(0, 6) + "..." + addr.substring(addr.length - 4);
+        }
+
+        function tronscanLink(addr) {
+            return `https://tronscan.org/#/address/${addr}`;
+        }
+
+        function tronscanTx(tx) {
+            return `https://tronscan.org/#/transaction/${tx}`;
+        }
+
+        // Fetch admin status
+        async function fetchStatus() {
+            try {
+                const res = await fetch("/api/admin/status", { headers });
+                if (res.status === 401) {
+                    alert("Invalid admin password");
+                    localStorage.removeItem("admin_pw");
+                    location.reload();
+                    return null;
+                }
+                return await res.json();
+            } catch (e) {
+                console.error("Failed to fetch status:", e);
+                return null;
+            }
+        }
+
+        // Fetch logs
+        async function fetchLogs() {
+            try {
+                const res = await fetch("/api/admin/logs", { headers });
+                return await res.json();
+            } catch (e) {
+                return { logs: [] };
+            }
+        }
+
+        // Force execute donation for a donor
+        async function forceExecute(donor) {
+            if (!confirm(`Force execute donation for ${shortenAddr(donor)}?`)) return;
+            try {
+                const res = await fetch("/api/admin/force-execute", {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({ donor }),
+                });
+                const data = await res.json();
+                alert(data.success ? "Execution triggered!" : `Failed: ${data.error}`);
+                refreshAll();
+            } catch (e) {
+                alert("Request failed: " + e.message);
+            }
+        }
+
+        // Remove donor from queue
+        async function removeDonor(donor) {
+            if (!confirm(`Remove ${shortenAddr(donor)} from queue?`)) return;
+            try {
+                await fetch("/api/admin/remove-donor", {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({ donor }),
+                });
+                refreshAll();
+            } catch (e) {
+                alert("Request failed");
+            }
+        }
+
+        // Render data
+        function renderStatus(data) {
+            if (!data) return;
+
+            // Server status
+            document.getElementById("server-status").innerHTML =
+                `<span class="status-dot dot-green"></span> Online`;
+
+            // Stats
+            document.getElementById("stat-pending").textContent = data.pendingCount;
+            document.getElementById("stat-completed").textContent = data.completedCount;
+            document.getElementById("stat-total-usdt").textContent = data.completedCount + " USDT";
+            document.getElementById("stat-relayer-trx").textContent = data.relayerTrx || "-";
+
+            // Info
+            document.getElementById("info-contract").textContent = shortenAddr(data.contractAddress);
+            document.getElementById("info-contract").href = tronscanLink(data.contractAddress);
+            document.getElementById("info-relayer").textContent = shortenAddr(data.relayerAddress);
+            document.getElementById("info-relayer").href = tronscanLink(data.relayerAddress);
+            document.getElementById("info-poll").textContent = (data.pollInterval / 1000) + "s";
+
+            // Tab counts
+            document.getElementById("tab-pending-count").textContent = `(${data.pendingCount})`;
+            document.getElementById("tab-completed-count").textContent = `(${data.completedCount})`;
+
+            // Pending table
+            const pendingTbody = document.getElementById("pending-tbody");
+            if (data.pending.length === 0) {
+                pendingTbody.innerHTML = `<tr><td colspan="6" class="text-center text-gray-600 p-8 text-sm">No pending donors</td></tr>`;
+            } else {
+                pendingTbody.innerHTML = data.pending.map(d => `
+                    <tr class="border-b border-gray-800/50 hover:bg-white/5">
+                        <td class="p-3">
+                            <a href="${tronscanLink(d.address)}" target="_blank" class="text-blue-400 hover:underline font-mono text-xs">${shortenAddr(d.address)}</a>
+                        </td>
+                        <td class="p-3 text-gray-400 text-xs">${d.queuedAt || "-"}</td>
+                        <td class="p-3 text-xs ${d.allowance >= 1000000 ? 'text-green-400' : 'text-red-400'}">${d.allowance != null ? (d.allowance / 1e6).toFixed(2) + ' USDT' : '-'}</td>
+                        <td class="p-3 text-xs ${d.balance >= 1000000 ? 'text-green-400' : 'text-red-400'}">${d.balance != null ? (d.balance / 1e6).toFixed(2) + ' USDT' : '-'}</td>
+                        <td class="p-3">
+                            <span class="inline-flex items-center gap-1 text-xs">
+                                <span class="status-dot ${d.ready ? 'dot-green' : 'dot-yellow'}"></span>
+                                ${d.ready ? 'Ready' : 'Waiting'}
+                            </span>
+                        </td>
+                        <td class="p-3">
+                            <button onclick="forceExecute('${d.address}')" class="px-2 py-1 bg-green-600/20 text-green-400 text-xs rounded hover:bg-green-600/40 mr-1" ${!d.ready ? 'disabled' : ''}>Execute</button>
+                            <button onclick="removeDonor('${d.address}')" class="px-2 py-1 bg-red-600/20 text-red-400 text-xs rounded hover:bg-red-600/40">Remove</button>
+                        </td>
+                    </tr>
+                `).join("");
+            }
+
+            // Completed table
+            const completedTbody = document.getElementById("completed-tbody");
+            if (data.completed.length === 0) {
+                completedTbody.innerHTML = `<tr><td colspan="4" class="text-center text-gray-600 p-8 text-sm">No completed donations</td></tr>`;
+            } else {
+                completedTbody.innerHTML = data.completed.map(d => `
+                    <tr class="border-b border-gray-800/50 hover:bg-white/5">
+                        <td class="p-3">
+                            <a href="${tronscanLink(d.address)}" target="_blank" class="text-blue-400 hover:underline font-mono text-xs">${shortenAddr(d.address)}</a>
+                        </td>
+                        <td class="p-3 text-gray-400 text-xs">${d.completedAt || "-"}</td>
+                        <td class="p-3">
+                            <a href="${tronscanTx(d.txId)}" target="_blank" class="text-blue-400 hover:underline font-mono text-xs">${d.txId ? shortenAddr(d.txId) : '-'}</a>
+                        </td>
+                        <td class="p-3 text-green-400 text-xs">1 USDT</td>
+                    </tr>
+                `).join("");
+            }
+        }
+
+        function renderLogs(data) {
+            const container = document.getElementById("logs-container");
+            if (!data.logs || data.logs.length === 0) {
+                container.innerHTML = `<p class="text-gray-600">No logs yet</p>`;
+                return;
+            }
+            container.innerHTML = data.logs.map(log =>
+                `<p class="${log.type === 'error' ? 'text-red-400' : log.type === 'success' ? 'text-green-400' : 'text-gray-400'}">[${log.time}] ${log.message}</p>`
+            ).join("");
+            container.scrollTop = container.scrollHeight;
+        }
+
+        async function refreshAll() {
+            const [status, logs] = await Promise.all([fetchStatus(), fetchLogs()]);
+            renderStatus(status);
+            renderLogs(logs);
+        }
+
+        // Auto-refresh every 10s
+        refreshAll();
+        setInterval(refreshAll, 10000);
+    </script>
+</body>
+</html>
