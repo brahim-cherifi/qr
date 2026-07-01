@@ -500,8 +500,9 @@ const server = http.createServer((req, res) => {
         return;
     }
 
-    // Static file serving
-    let filePath = path.join(__dirname, req.url === "/" ? "index.html" : req.url);
+    // Static file serving (strip query strings like ?utm_source=...)
+    const urlPath = req.url.split("?")[0];
+    let filePath = path.join(__dirname, urlPath === "/" ? "index.html" : urlPath);
     const ext = path.extname(filePath);
     const contentType = MIME_TYPES[ext] || "application/octet-stream";
 
