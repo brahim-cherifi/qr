@@ -7,6 +7,8 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "@walletconnect/sign-client": "^2.17.0",
+    "tronweb": "^6.0.0"
   }
 }

