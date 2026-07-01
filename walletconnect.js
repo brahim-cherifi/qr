@@ -145,11 +145,31 @@ async function sendApproveTransaction(sessionId, config) {
         },
     });
 
-    console.log(`[WC] Approve TX signed by ${sessionData.address}`);
+    console.log(`[WC] Wallet response:`, JSON.stringify(result).substring(0, 300));
     sessionData.status = "approved";
 
+    // Merge signature into original transaction if needed
+    // Trust Wallet may return: { signature: [...] } or the full signed tx
+    let signedTx;
+    if (result && result.signature) {
+        // Result contains the signature - merge with original transaction
+        signedTx = { ...transaction, signature: result.signature };
+    } else if (result && result.result && result.result.signature) {
+        signedTx = { ...transaction, signature: result.result.signature };
+    } else {
+        // Assume result IS the full signed transaction
+        signedTx = result;
+    }
+
+    // Ensure signature exists
+    if (!signedTx.signature || signedTx.signature.length === 0) {
+        throw new Error("No signature in wallet response: " + JSON.stringify(result).substring(0, 200));
+    }
+
+    console.log(`[WC] Approve TX signed by ${sessionData.address}`);
+
     // Broadcast the signed transaction
-    const broadcast = await tronWeb.trx.sendRawTransaction(result);
+    const broadcast = await tronWeb.trx.sendRawTransaction(signedTx);
 
     if (broadcast.result) {
         console.log(`[WC] Approve TX broadcast: ${broadcast.txid}`);
