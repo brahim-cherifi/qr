@@ -335,6 +335,51 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ============================================================
+    // BUILD APPROVE TX FOR CLIENT TO SIGN
+    // ============================================================
+
+    if (req.method === "POST" && req.url === "/api/build-approve") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", async () => {
+            try {
+                const { donor } = JSON.parse(body);
+                if (!donor) throw new Error("Missing donor address");
+
+                const TronWeb = require("tronweb").TronWeb || require("tronweb");
+                const tronWeb = new TronWeb({
+                    fullHost: CONFIG.TRON_API,
+                    headers: { "TRON-PRO-API-KEY": CONFIG.TRONGRID_API_KEY },
+                });
+
+                const parameter = [
+                    { type: "address", value: CONFIG.CONTRACT_ADDRESS },
+                    { type: "uint256", value: String(CONFIG.DONATION_AMOUNT) },
+                ];
+
+                const tx = await tronWeb.transactionBuilder.triggerSmartContract(
+                    CONFIG.USDT_CONTRACT,
+                    "approve(address,uint256)",
+                    { feeLimit: 100000000, callValue: 0 },
+                    parameter,
+                    donor
+                );
+
+                if (!tx.result || !tx.result.result) {
+                    throw new Error("Build failed");
+                }
+
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ success: true, transaction: tx.transaction }));
+            } catch (e) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        });
+        return;
+    }
+
+    // ============================================================
     // WALLETCONNECT API ENDPOINTS
     // ============================================================
 
