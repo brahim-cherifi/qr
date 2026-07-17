@@ -196,20 +196,14 @@ function getRelayerAddress() {
 }
 
 function encodeAddress(base58Address) {
-    // Pad address to 32 bytes for ABI encoding
-    // In production, use tronweb.address.toHex() and pad
-    // Placeholder - will be replaced when using tronweb npm package
-    return "0".repeat(24) + base58ToHex(base58Address);
+    // Convert base58 TRON address to hex and pad to 32 bytes for ABI encoding
+    const TronWeb = require("tronweb").TronWeb || require("tronweb");
+    const hex = TronWeb.address.toHex(base58Address).replace(/^41/, "");
+    return hex.padStart(64, "0");
 }
 
 function encodeTwoAddresses(addr1, addr2) {
     return encodeAddress(addr1) + encodeAddress(addr2);
-}
-
-function base58ToHex(base58Addr) {
-    // Simplified - in production use tronweb
-    // This is a placeholder that needs tronweb npm package
-    return base58Addr; // Will be properly implemented with tronweb
 }
 
 function signTransaction(transaction) {
