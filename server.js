@@ -242,14 +242,15 @@ async function delegateEnergy(donorAddress) {
             }
         );
 
-        if (!result.transaction) {
-            // If delegation fails, try the older freezebalancev2 approach
+        // API may return {transaction: ...} or the transaction directly
+        const tx = result.transaction || result;
+        if (!tx.txID && !tx.raw_data_hex) {
             console.error("[ENERGY] Delegation failed:", result);
             return { success: false, error: "Failed to build delegation tx" };
         }
 
         // Sign and broadcast
-        const signed = signTransaction(result.transaction);
+        const signed = signTransaction(tx);
         const broadcast = await tronGridRequest(
             `/wallet/broadcasttransaction`,
             "POST",
