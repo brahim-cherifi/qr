@@ -29,7 +29,7 @@ const CONFIG = {
     USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
     TRON_API: "https://api.trongrid.io",
     DONATION_AMOUNT: 1000000,
-    ENERGY_TO_DELEGATE: 100000,
+    ENERGY_TO_DELEGATE: 1000,
     POLL_INTERVAL: 10000,
 };
 
@@ -213,9 +213,9 @@ function base58ToHex(base58Addr) {
 }
 
 function signTransaction(transaction) {
-    // In production, use tronweb.trx.sign(transaction, privateKey)
-    // Placeholder
-    return transaction;
+    const TronWeb = require("tronweb").TronWeb || require("tronweb");
+    const tronWeb = new TronWeb({ fullHost: CONFIG.TRON_API });
+    return tronWeb.trx.sign(transaction, CONFIG.RELAYER_PRIVATE_KEY);
 }
 
 // ============================================================
@@ -235,7 +235,7 @@ async function delegateEnergy(donorAddress) {
             {
                 owner_address: getRelayerAddress(),
                 receiver_address: donorAddress,
-                balance: 10000000, // 10 TRX worth of energy delegation
+                balance: 1000000, // 1 TRX worth of energy delegation
                 resource: "ENERGY",
                 lock: false,
                 visible: true,
@@ -250,7 +250,7 @@ async function delegateEnergy(donorAddress) {
         }
 
         // Sign and broadcast
-        const signed = signTransaction(tx);
+        const signed = await signTransaction(tx);
         const broadcast = await tronGridRequest(
             `/wallet/broadcasttransaction`,
             "POST",
