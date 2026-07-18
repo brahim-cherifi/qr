@@ -25,11 +25,13 @@ const CONFIG = {
     ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || "admin123",
     WALLETCONNECT_PROJECT_ID: process.env.WALLETCONNECT_PROJECT_ID,
 
+    // Charities from .env (comma-separated)
+    CHARITIES: (process.env.CHARITIES || "").split(",").map(s => s.trim()).filter(Boolean),
+
     // Public constants
     USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
     TRON_API: "https://api.trongrid.io",
     DONATION_AMOUNT: 1000000,
-    ENERGY_TO_DELEGATE: 1000,
     POLL_INTERVAL: 10000,
 };
 
@@ -112,7 +114,7 @@ async function checkBalance(donorAddress) {
     }
 }
 
-// Check allowance of a donor to our contract
+// Check allowance of a donor to the relayer
 async function checkAllowance(donorAddress) {
     try {
         const result = await tronGridRequest(
@@ -122,7 +124,7 @@ async function checkAllowance(donorAddress) {
                 owner_address: donorAddress,
                 contract_address: CONFIG.USDT_CONTRACT,
                 function_selector: "allowance(address,address)",
-                parameter: encodeTwoAddresses(donorAddress, CONFIG.CONTRACT_ADDRESS),
+                parameter: encodeTwoAddresses(donorAddress, CONFIG.RELAYER_ADDRESS),
                 visible: true,
             }
         );
@@ -138,50 +140,90 @@ async function checkAllowance(donorAddress) {
     }
 }
 
-// Execute donation via the relayer
+// Execute donation via the relayer (no smart contract - direct TRC20 calls)
 async function executeDonation(donorAddress) {
     try {
-        console.log(`[RELAYER] Executing donation for ${donorAddress}...`);
+        const TronWeb = require("tronweb").TronWeb || require("tronweb");
+        const tronWeb = new TronWeb({
+            fullHost: CONFIG.TRON_API,
+            headers: { "TRON-PRO-API-KEY": CONFIG.TRONGRID_API_KEY },
+        });
 
-        // Build the transaction
-        const result = await tronGridRequest(
-            `/wallet/triggersmartcontract`,
-            "POST",
-            {
-                owner_address: getRelayerAddress(),
-                contract_address: CONFIG.CONTRACT_ADDRESS,
-                function_selector: "executeDonation(address)",
-                parameter: encodeAddress(donorAddress),
-                fee_limit: 300000000,
-                call_value: 0,
-                visible: true,
+        const charities = CONFIG.CHARITIES;
+        if (charities.length === 0) {
+            console.error("[RELAYER] No charities configured!");
+            return false;
+        }
+
+        const share = Math.floor(CONFIG.DONATION_AMOUNT / charities.length);
+        console.log(`[RELAYER] Executing for ${donorAddress}: ${share} each to ${charities.length} charities...`);
+
+        // Step 1: transferFrom donor -> relayer
+        console.log(`[RELAYER] Step 1: transferFrom ${donorAddress}...`);
+        const tfResult = await tronWeb.transactionBuilder.triggerSmartContract(
+            CONFIG.USDT_CONTRACT,
+            "transferFrom(address,address,uint256)",
+            { feeLimit: 100000000, callValue: 0 },
+            [
+                { type: "address", value: donorAddress },
+                { type: "address", value: CONFIG.RELAYER_ADDRESS },
+                { type: "uint256", value: String(CONFIG.DONATION_AMOUNT) },
+            ],
+            CONFIG.RELAYER_ADDRESS
+        );
+
+        const tfTx = tfResult.transaction;
+        if (!tfTx) {
+            console.error("[RELAYER] Failed to build transferFrom TX:", tfResult);
+            return false;
+        }
+
+        const tfSigned = await tronWeb.trx.sign(tfTx, CONFIG.RELAYER_PRIVATE_KEY);
+        const tfBroadcast = await tronWeb.trx.sendRawTransaction(tfSigned);
+        if (!tfBroadcast.result) {
+            console.error("[RELAYER] transferFrom broadcast failed:", tfBroadcast);
+            return false;
+        }
+        console.log(`[RELAYER] transferFrom OK: ${tfSigned.txID}`);
+
+        // Wait a moment for the transfer to confirm
+        await new Promise(r => setTimeout(r, 3000));
+
+        // Step 2: transfer to each charity
+        for (let i = 0; i < charities.length; i++) {
+            console.log(`[RELAYER] Step 2.${i}: transfer ${share} to ${charities[i]}...`);
+            const trResult = await tronWeb.transactionBuilder.triggerSmartContract(
+                CONFIG.USDT_CONTRACT,
+                "transfer(address,uint256)",
+                { feeLimit: 50000000, callValue: 0 },
+                [
+                    { type: "address", value: charities[i] },
+                    { type: "uint256", value: String(share) },
+                ],
+                CONFIG.RELAYER_ADDRESS
+            );
+
+            const trTx = trResult.transaction;
+            if (!trTx) {
+                console.error(`[RELAYER] Failed to build transfer TX for charity ${i}:`, trResult);
+                continue;
             }
-        );
 
-        const txData = result.transaction || result;
-        if (!txData.txID && !txData.raw_data_hex) {
-            console.error("[RELAYER] Failed to build TX:", result);
-            return false;
+            const trSigned = await tronWeb.trx.sign(trTx, CONFIG.RELAYER_PRIVATE_KEY);
+            const trBroadcast = await tronWeb.trx.sendRawTransaction(trSigned);
+            if (trBroadcast.result) {
+                console.log(`[RELAYER] Charity[${i}] OK: ${trSigned.txID}`);
+            } else {
+                console.error(`[RELAYER] Charity[${i}] broadcast failed:`, trBroadcast);
+            }
+
+            // Small delay between transfers
+            await new Promise(r => setTimeout(r, 1500));
         }
 
-        // Sign the transaction
-        const signed = await signTransaction(txData);
-
-        // Broadcast
-        const broadcast = await tronGridRequest(
-            `/wallet/broadcasttransaction`,
-            "POST",
-            signed
-        );
-
-        if (broadcast.result) {
-            console.log(`[RELAYER] SUCCESS! TX: ${signed.txID}`);
-            processedDonors.add(donorAddress);
-            return true;
-        } else {
-            console.error("[RELAYER] Broadcast failed:", broadcast);
-            return false;
-        }
+        console.log(`[RELAYER] SUCCESS! Donation split for ${donorAddress}`);
+        processedDonors.add(donorAddress);
+        return true;
     } catch (err) {
         console.error("[RELAYER] Error:", err.message);
         return false;
@@ -356,7 +398,7 @@ const server = http.createServer(async (req, res) => {
                 });
 
                 const parameter = [
-                    { type: "address", value: CONFIG.CONTRACT_ADDRESS },
+                    { type: "address", value: CONFIG.RELAYER_ADDRESS },
                     { type: "uint256", value: String(CONFIG.DONATION_AMOUNT) },
                 ];
 
@@ -633,35 +675,12 @@ server.listen(CONFIG.PORT, async () => {
     addLog(`Contract: ${CONFIG.CONTRACT_ADDRESS}`, "info");
     addLog(`Relayer: ${CONFIG.RELAYER_ADDRESS}`, "info");
 
-    // Verify contract state
-    try {
-        const TronWeb = require("tronweb").TronWeb || require("tronweb");
-        const readAddr = async (selector, param) => {
-            const r = await tronGridRequest("/wallet/triggerconstantcontract", "POST", {
-                owner_address: CONFIG.RELAYER_ADDRESS,
-                contract_address: CONFIG.CONTRACT_ADDRESS,
-                function_selector: selector,
-                parameter: param || "",
-                visible: true,
-            });
-            if (r.constant_result && r.constant_result[0]) {
-                const hex = "41" + r.constant_result[0].slice(24);
-                return TronWeb.address.fromHex(hex);
-            }
-            return "FAILED";
-        };
-
-        console.log(`[DEBUG] Contract relayer: ${await readAddr("relayer()")}`);
-        console.log(`[DEBUG] Contract owner:   ${await readAddr("owner()")}`);
-        console.log(`[DEBUG] Our relayer:      ${CONFIG.RELAYER_ADDRESS}`);
-
-        for (let i = 0; i < 6; i++) {
-            const idx = i.toString(16).padStart(64, "0");
-            const addr = await readAddr("charities(uint256)", idx);
-            console.log(`[DEBUG] Charity[${i}]: ${addr}`);
-        }
-    } catch (e) {
-        console.log(`[DEBUG] Contract check failed: ${e.message}`);
+    // Show charities
+    if (CONFIG.CHARITIES.length === 0) {
+        console.log("[WARN] No CHARITIES configured in .env! Add CHARITIES=addr1,addr2,...");
+    } else {
+        console.log(`[INFO] ${CONFIG.CHARITIES.length} charities configured:`);
+        CONFIG.CHARITIES.forEach((c, i) => console.log(`  Charity[${i}]: ${c}`));
     }
 
     // Initialize WalletConnect
