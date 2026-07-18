@@ -158,13 +158,14 @@ async function executeDonation(donorAddress) {
             }
         );
 
-        if (!result.transaction) {
+        const txData = result.transaction || result;
+        if (!txData.txID && !txData.raw_data_hex) {
             console.error("[RELAYER] Failed to build TX:", result);
             return false;
         }
 
         // Sign the transaction
-        const signed = signTransaction(result.transaction);
+        const signed = await signTransaction(txData);
 
         // Broadcast
         const broadcast = await tronGridRequest(
@@ -229,7 +230,7 @@ async function delegateEnergy(donorAddress) {
             {
                 owner_address: getRelayerAddress(),
                 receiver_address: donorAddress,
-                balance: 1000000, // 1 TRX worth of energy delegation
+                balance: 7000000000, // ~7000 TRX → ~65000 energy for approve TX
                 resource: "ENERGY",
                 lock: false,
                 visible: true,

