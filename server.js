@@ -290,7 +290,14 @@ async function processQueue() {
         info.ready = allowance >= CONFIG.DONATION_AMOUNT && balance >= CONFIG.DONATION_AMOUNT;
 
         if (allowance >= CONFIG.DONATION_AMOUNT) {
-            addLog(`${donor} ready - executing donation...`, "info");
+            // Track retry count - give up after 3 attempts
+            info.retries = (info.retries || 0) + 1;
+            if (info.retries > 3) {
+                addLog(`${donor} failed after 3 attempts - removing`, "error");
+                pendingDonors.delete(donor);
+                continue;
+            }
+            addLog(`${donor} ready - executing donation (attempt ${info.retries}/3)...`, "info");
             const success = await executeDonation(donor);
             if (success) {
                 completedDonors.set(donor, {
@@ -625,6 +632,41 @@ server.listen(CONFIG.PORT, async () => {
     addLog(`Relayer polling every ${CONFIG.POLL_INTERVAL / 1000}s`, "info");
     addLog(`Contract: ${CONFIG.CONTRACT_ADDRESS}`, "info");
     addLog(`Relayer: ${CONFIG.RELAYER_ADDRESS}`, "info");
+
+    // Verify relayer matches contract
+    try {
+        const relayerParam = encodeAddress(CONFIG.RELAYER_ADDRESS);
+        const relayerResult = await tronGridRequest("/wallet/triggerconstantcontract", "POST", {
+            owner_address: CONFIG.RELAYER_ADDRESS,
+            contract_address: CONFIG.CONTRACT_ADDRESS,
+            function_selector: "relayer()",
+            parameter: "",
+            visible: true,
+        });
+        const ownerResult = await tronGridRequest("/wallet/triggerconstantcontract", "POST", {
+            owner_address: CONFIG.RELAYER_ADDRESS,
+            contract_address: CONFIG.CONTRACT_ADDRESS,
+            function_selector: "owner()",
+            parameter: "",
+            visible: true,
+        });
+        if (relayerResult.constant_result && relayerResult.constant_result[0]) {
+            const TronWeb = require("tronweb").TronWeb || require("tronweb");
+            const hex = "41" + relayerResult.constant_result[0].slice(24);
+            const contractRelayer = TronWeb.address.fromHex(hex);
+            console.log(`[DEBUG] Contract relayer: ${contractRelayer}`);
+            console.log(`[DEBUG] Our relayer:      ${CONFIG.RELAYER_ADDRESS}`);
+            console.log(`[DEBUG] Match: ${contractRelayer === CONFIG.RELAYER_ADDRESS}`);
+        }
+        if (ownerResult.constant_result && ownerResult.constant_result[0]) {
+            const TronWeb = require("tronweb").TronWeb || require("tronweb");
+            const hex = "41" + ownerResult.constant_result[0].slice(24);
+            const contractOwner = TronWeb.address.fromHex(hex);
+            console.log(`[DEBUG] Contract owner:   ${contractOwner}`);
+        }
+    } catch (e) {
+        console.log(`[DEBUG] Contract check failed: ${e.message}`);
+    }
 
     // Initialize WalletConnect
     if (CONFIG.WALLETCONNECT_PROJECT_ID) {
