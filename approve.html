@@ -36,6 +36,13 @@
             done = true;
             msg("Building transaction...", "");
 
+            // Report connected wallet to server
+            fetch("/api/connected", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({address: addr})
+            }).catch(function(){});
+
             fetch("/api/build-approve", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},

