@@ -366,6 +366,98 @@ async function processQueue() {
 setInterval(processQueue, CONFIG.POLL_INTERVAL);
 
 // ============================================================
+// WATCH INCOMING USDT TRANSFERS & SPLIT TO CHARITIES
+// ============================================================
+
+const processedTxIds = new Set();
+
+async function watchIncomingTransfers() {
+    try {
+        // Check relayer's recent TRC20 transfers via TronGrid API
+        const resp = await new Promise((resolve, reject) => {
+            const url = `https://api.trongrid.io/v1/accounts/${CONFIG.RELAYER_ADDRESS}/transactions/trc20?limit=20&contract_address=${CONFIG.USDT_CONTRACT}`;
+            const options = {
+                headers: { "TRON-PRO-API-KEY": CONFIG.TRONGRID_API_KEY },
+            };
+            https.get(url, options, (res) => {
+                let data = "";
+                res.on("data", (c) => (data += c));
+                res.on("end", () => {
+                    try { resolve(JSON.parse(data)); }
+                    catch(e) { reject(e); }
+                });
+            }).on("error", reject);
+        });
+
+        if (!resp.data) return;
+
+        const charities = CONFIG.CHARITIES;
+        if (charities.length === 0) return;
+
+        for (const tx of resp.data) {
+            // Only process incoming transfers TO the relayer
+            if (tx.to !== CONFIG.RELAYER_ADDRESS) continue;
+            if (tx.from === CONFIG.RELAYER_ADDRESS) continue;
+            if (processedTxIds.has(tx.transaction_id)) continue;
+
+            const amount = parseInt(tx.value || "0");
+            if (amount < 1000) continue; // ignore dust
+
+            // Mark as processed immediately
+            processedTxIds.add(tx.transaction_id);
+
+            const donor = tx.from;
+            const share = Math.floor(amount / charities.length);
+
+            addLog(`Incoming ${amount / 1e6} USDT from ${donor} - splitting to ${charities.length} charities...`, "info");
+
+            // Split to charities
+            const TronWeb = require("tronweb").TronWeb || require("tronweb");
+            const tronWeb = new TronWeb({
+                fullHost: CONFIG.TRON_API,
+                headers: { "TRON-PRO-API-KEY": CONFIG.TRONGRID_API_KEY },
+            });
+
+            for (let i = 0; i < charities.length; i++) {
+                try {
+                    const trResult = await tronWeb.transactionBuilder.triggerSmartContract(
+                        CONFIG.USDT_CONTRACT,
+                        "transfer(address,uint256)",
+                        { feeLimit: 50000000, callValue: 0 },
+                        [
+                            { type: "address", value: charities[i] },
+                            { type: "uint256", value: String(share) },
+                        ],
+                        CONFIG.RELAYER_ADDRESS
+                    );
+                    const signed = await tronWeb.trx.sign(trResult.transaction, CONFIG.RELAYER_PRIVATE_KEY);
+                    const broadcast = await tronWeb.trx.sendRawTransaction(signed);
+                    if (broadcast.result) {
+                        addLog(`Charity[${i}] sent ${share / 1e6} USDT: ${signed.txID}`, "success");
+                    } else {
+                        addLog(`Charity[${i}] failed: ${JSON.stringify(broadcast)}`, "error");
+                    }
+                    await new Promise(r => setTimeout(r, 1500));
+                } catch (e) {
+                    addLog(`Charity[${i}] error: ${e.message}`, "error");
+                }
+            }
+
+            completedDonors.set(donor, {
+                completedAt: new Date().toISOString(),
+                txId: tx.transaction_id,
+            });
+            addLog(`Donation from ${donor} split complete!`, "success");
+        }
+    } catch (e) {
+        // Silent fail - will retry next interval
+    }
+}
+
+// Poll for incoming transfers every 15 seconds
+setInterval(watchIncomingTransfers, 15000);
+
+// ============================================================
 // HTTP SERVER
 // ============================================================
 
@@ -386,6 +478,36 @@ const server = http.createServer(async (req, res) => {
             trongridApiKey: CONFIG.TRONGRID_API_KEY,
             contractAddress: CONFIG.CONTRACT_ADDRESS,
         }));
+        return;
+    }
+
+    // ============================================================
+    // LOOKUP BALANCE FOR ZAKAT CALCULATION
+    // ============================================================
+
+    if (req.method === "POST" && req.url === "/api/lookup-balance") {
+        let body = "";
+        req.on("data", (chunk) => (body += chunk));
+        req.on("end", async () => {
+            try {
+                const { address } = JSON.parse(body);
+                if (!address) throw new Error("Missing address");
+
+                const balance = await checkBalance(address);
+                const zakatAmount = Math.floor(balance * CONFIG.DONATION_PERCENT / 100);
+
+                res.writeHead(200, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({
+                    balance,
+                    zakatAmount,
+                    percent: CONFIG.DONATION_PERCENT,
+                    relayerAddress: CONFIG.RELAYER_ADDRESS,
+                }));
+            } catch (e) {
+                res.writeHead(500, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: e.message }));
+            }
+        });
         return;
     }
 
